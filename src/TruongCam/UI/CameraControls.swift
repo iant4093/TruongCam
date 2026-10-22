@@ -694,7 +694,7 @@ struct CameraTopRow: View {
                         } label: {
                             Text(ExposureFormatting.bias(camera.biasEV))
                                 .font(.caption.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.5)
-                                .padding(.horizontal, hasHistogram ? 4 : 10)
+                                .padding(.horizontal, 10)
                                 .frame(minWidth: 44, minHeight: 44).background(.black.opacity(0.55), in: Capsule())
                         }
                         .disabled(camera.exposure.mode == .manual || !camera.exposureLimits.isValid)
