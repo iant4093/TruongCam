@@ -22,6 +22,33 @@ A lightweight iPhone camera for genuine Bayer RAW, manual controls and originals
 
 TruongCam captures individual originals without merging or editing the RAW data. Photos save to a local folder you choose in Files; the gallery, export and Recently Deleted work with that library. Reconnecting the same retained folder after a reinstall rebuilds the gallery. New photos and app records live in separate `originals/` and `metadata/` folders.
 
+## Screenshots
+
+Simulator UI examples with staged photo content and illustrative camera readings. Photography is from [my Stagman Ridge hike](https://iantruongphotography.com/album/stagman-ridge-10-3), part of the [Hikes collection](https://iantruongphotography.com/sections/photo/Hikes).
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/camera.webp" width="100%" alt="TruongCam camera showing a mountain and creek, RGB histogram, thirds grid, exposure controls and the shutter">
+      <p align="center"><sub><b>Camera</b> · viewfinder, preview aids and direct controls</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/tools.webp" width="100%" alt="Capture tools with green controls for the grid, histogram and level, plus focus peaking, zebras and the focus loupe">
+      <p align="center"><sub><b>Capture tools</b> · composition and focusing aids</sub></p>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/library.webp" width="100%" alt="Photo library with a date-grouped grid of Stagman Ridge hiking photos, including mountains, a lake, forest trails and sunsets">
+      <p align="center"><sub><b>Photo library</b> · date-grouped browsing and photo management</sub></p>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/viewer.webp" width="100%" alt="Photo viewer showing a mountain in warm evening light, capture settings below the photo and glass navigation, info, share and delete buttons">
+      <p align="center"><sub><b>Photo viewer</b> · fitted image, capture settings and glass actions</sub></p>
+    </td>
+  </tr>
+</table>
+
 ## Features
 
 **Camera**
@@ -120,6 +147,7 @@ GitHub Actions are pinned to commit SHAs and Dependabot checks them weekly. CI u
 │   └── TruongCamTests/     Shared regression suites and native XCTest
 ├── TruongCam.xcodeproj/    Native project and shared scheme
 ├── scripts/               Lint, test, build, validation and packaging commands
+├── docs/screenshots/      Compressed README images, outside the app bundle
 ├── .github/               CI/release workflow and dependency-update configuration
 ├── .swiftlint.yml         Focused correctness rules
 └── README.md
