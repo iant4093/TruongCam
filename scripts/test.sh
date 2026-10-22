@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Require real Simulator execution in CI; local portable tests are explicit.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mode="${1:-native}"
+if [ "$mode" = local ]; then exec bash scripts/verify-logic.sh; fi
+if [ "$mode" != native ]; then echo "Usage: scripts/test.sh [native|local]" >&2; exit 2; fi
+mkdir -p build/logs build/test-results
+udid="$(xcrun simctl list devices available --json | python3 -c '
+import json,sys,re
+choices=[]
+for runtime,devices in json.load(sys.stdin).get("devices",{}).items():
+    match=re.search(r"iOS-(\d+)-(\d+)",runtime)
+    if not match or int(match[1])<27: continue
+    for d in devices:
+        if d.get("isAvailable") and d.get("name", "").startswith("iPhone"):
+            choices.append(((int(match[1]),int(match[2]),d["name"]=="iPhone 17",d.get("state")=="Booted"),d["udid"]))
+if not choices: sys.exit("No iOS 27+ iPhone Simulator is installed")
+print(max(choices)[1])')"
+xcrun simctl boot "$udid" 2>/dev/null || true
+xcrun simctl bootstatus "$udid" -b
+result="build/test-results/TruongCam-$(date -u +%Y%m%dT%H%M%SZ)-$$.xcresult"
+echo "Testing on $udid; result: $result"
+status=0
+xcodebuild -project TruongCam.xcodeproj -scheme TruongCam -configuration Debug \
+  -destination "platform=iOS Simulator,id=$udid" -derivedDataPath build/SimulatorDerivedData \
+  -parallel-testing-enabled NO -collect-test-diagnostics never \
+  -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test > build/logs/test-native.log 2>&1 || status=$?
+tail -30 build/logs/test-native.log
+exit "$status"

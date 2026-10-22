@@ -1,0 +1,21 @@
+# Xcode and local build output
+build/
+DerivedData/
+*.xcresult
+*.ipa
+*.dSYM/
+*.dSYM.zip
+xcuserdata/
+*.xcuserstate
+.DS_Store
+
+# Local credentials and tools
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.mobileprovision
+*.key
+.venv/
+.swiftlint_cache/
