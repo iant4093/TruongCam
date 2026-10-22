@@ -18,6 +18,10 @@ jobs:
     name: Workflow and secret checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -25,6 +29,15 @@ jobs:
           persist-credentials: false
       - name: actionlint, zizmor and Gitleaks
         run: bash scripts/check-workflows.sh
+      - name: Initialize workflow CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          languages: actions
+          build-mode: none
+      - name: CodeQL workflow analysis
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
+        with:
+          category: /language:actions
 
   logic:
     name: SwiftLint and portable tests
@@ -70,13 +83,11 @@ jobs:
           retention-days: 7
 
   device:
-    name: Device build and security analysis
+    name: Device build and static analysis
     runs-on: xcode-27
     timeout-minutes: 30
     permissions:
       contents: read
-      security-events: write
-      actions: read
       id-token: write
       attestations: write
     steps:
@@ -89,11 +100,6 @@ jobs:
           sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
           test "${sdk%%.*}" -ge 27
           printf 'TRUONGCAM_BUILD_NUMBER=%s\n' "$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
-        with:
-          languages: swift
-          build-mode: manual
       - name: Unsigned Debug and Release builds
         run: bash scripts/build.sh
       - name: Xcode static analysis
@@ -102,10 +108,6 @@ jobs:
             -configuration Debug -destination 'generic/platform=iOS' \
             -derivedDataPath build/AnalysisDerivedData CODE_SIGNING_ALLOWED=NO \
             analyze > build/logs/analyze.log 2>&1
-      - name: CodeQL analysis
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
-        with:
-          category: /language:swift
       - name: Validate and package IPA
         run: |
           bash scripts/package-ipa.sh
@@ -170,7 +172,7 @@ jobs:
           else
             gh release create "$tag" --draft --target "$GITHUB_SHA" \
               --title "TruongCam · Build $((1000 + GITHUB_RUN_NUMBER))" \
-              --notes "Built from $GITHUB_SHA after lint, regression tests, static analysis and CodeQL. Download TruongCam.ipa and sign it with your sideloading tool. This is an unsigned device IPA, not an App Store or TestFlight build. Checksums and matching crash symbols are attached."
+              --notes "Built from $GITHUB_SHA after SwiftLint, regression tests, Xcode static analysis and workflow security checks. Download TruongCam.ipa and sign it with your sideloading tool. This is an unsigned device IPA, not an App Store or TestFlight build. Checksums and matching crash symbols are attached."
           fi
           gh release upload "$tag" TruongCam.ipa TruongCam.dSYM.zip SHA256SUMS --clobber
           gh release edit "$tag" --draft=false --latest

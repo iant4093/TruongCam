@@ -9,9 +9,9 @@ import Foundation
 #endif
 
 
-// TEST_PLAN.md T25–T30 (plus the interval/bracket/settlement checks the packets
-// require) driven by `VirtualMonotonicClock` and deterministic fakes. No real
-// sleeping, no device, no AVFoundation.
+// Sequence, interval, bracket and settlement checks use virtual time and
+// deterministic fakes, with a brief executor handoff before clock advances.
+// No device or AVFoundation is involved.
 //
 // Every fake is named with a `Seq` prefix so it cannot collide with another
 // suite's fakes in the same compiled module.
@@ -67,6 +67,11 @@ func driveVirtualClock(_ clock: VirtualMonotonicClock,
     while steps < maxSteps {
         if await isDone() { return true }
         if clock.pendingWaiterCount > 0 {
+            // A cancellation poll can be asleep while the operation itself is
+            // still runnable. Yield actual executor time before advancing so a
+            // busy Simulator cannot manufacture a virtual startup timeout.
+            try? await Task.sleep(for: .milliseconds(1))
+            if await isDone() { return true }
             clock.advance(by: step)
         }
         for _ in 0..<4 { await Task.yield() }
@@ -1262,8 +1267,18 @@ enum SequenceSuite {
                     h.bracketSubmitter.submittedCount == 1
                 }
                 r.check("one native bracket was submitted", submitted)
-                let request = h.bracketSubmitter.submittedRequests[0]
-                let identities = h.bracketSubmitter.submittedIdentities[0]
+                guard submitted, let request = h.bracketSubmitter.submittedRequests.first,
+                      let identities = h.bracketSubmitter.submittedIdentities.first,
+                      identities.count == 3, request.intents.count == 3 else {
+                    await coordinator.cancel(sequenceID: plan.sequenceID)
+                    await h.executor.setBlocking(false)
+                    task.cancel()
+                    _ = await driveVirtualClock(h.clock) { box.value != nil }
+                    _ = await task.value
+                    r.check("native burst request is available before callback injection", false,
+                        "result: \(String(describing: box.value))")
+                    return
+                }
 
                 // Step 0 arrives and its save is in flight when the user cancels.
                 h.bracketSubmitter.push(BracketSourceCallback(

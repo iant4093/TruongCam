@@ -61,7 +61,7 @@ Choose a retained **On My iPhone** folder outside TruongCam's own container. Clo
 | Interface | SwiftUI, UIKit, Liquid Glass, Core Motion |
 | Preview and browsing | Core Image, Image I/O, Accelerate |
 | Storage | Security-scoped Files access, coordinated filesystem operations, SQLite |
-| Quality | SwiftLint, Swift 6 strict concurrency, warnings as errors, XCTest, Xcode static analysis, CodeQL |
+| Quality | SwiftLint, Swift 6 strict concurrency, warnings as errors, XCTest, Xcode static analysis; CodeQL for workflows |
 | Delivery | GitHub Actions, unsigned arm64 IPA, SHA-256 checksums, build attestations, external dSYM |
 
 ## Build locally
@@ -102,10 +102,12 @@ Pull requests and pushes to `main` run:
 1. Workflow lint/security checks with actionlint and zizmor, plus Gitleaks secret scanning.
 2. SwiftLint correctness checks, portable regressions and native Simulator tests.
 3. Unsigned Debug/Release device compilation with strict concurrency and warnings as errors.
-4. Xcode static analysis and CodeQL Swift security analysis.
+4. Xcode static analysis and CodeQL GitHub Actions workflow security analysis.
 5. Device binary validation, IPA packaging, checksums and matching crash-symbol packaging.
 
 After all gates pass, pushes to `main` publish a GitHub Release containing `TruongCam.ipa`, `SHA256SUMS` and `TruongCam.dSYM.zip`. The same workflow can be run manually on `main`. Pull requests never publish. Release artifacts have GitHub build provenance; publishing uses the workflow's scoped GitHub token, with no Apple certificate or provisioning secret.
+
+CodeQL Swift tracing is currently unavailable on this toolchain: [GitHub does not support traced scans on Xcode 27/macOS 27 or Swift 6.4](https://github.blog/changelog/2026-10-19-codeql-changes-for-macos-27-xcode-27-and-swift-6-4/). CI runs CodeQL on the workflows and uses the native compiler, SwiftLint, tests and Xcode analysis for the app.
 
 GitHub Actions are pinned to commit SHAs and Dependabot checks them weekly. CI uses GitHub's hosted `xcode-27` image to match the app's SDK. Build/test artifacts have short retention; generated output and local credentials are git-ignored.
 

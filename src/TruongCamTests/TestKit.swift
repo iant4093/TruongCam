@@ -221,6 +221,7 @@ final class TruongCamRegisteredSuiteTests: XCTestCase {
         for suite in suites {
             for testCase in suite.cases {
                 let recorder = TCRecorder()
+                print("TC_CASE \(suite.id)/\(testCase.id): \(testCase.title)")
                 await testCase.body(recorder)
                 if !recorder.allPassed {
                     let detail = recorder.failures
