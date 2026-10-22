@@ -13,14 +13,17 @@ for runtime,devices in json.load(sys.stdin).get("devices",{}).items():
     match=re.search(r"iOS-(\d+)-(\d+)",runtime)
     if not match or int(match[1])<27: continue
     for d in devices:
-        if d.get("isAvailable") and d.get("name", "").startswith("iPhone"):
-            choices.append(((int(match[1]),int(match[2]),d["name"]=="iPhone 17",d.get("state")=="Booted"),d["udid"]))
-if not choices: sys.exit("No iOS 27+ iPhone Simulator is installed")
+        # Pixel fixtures use iPhone 17 geometry. A newer runtime or a newly
+        # installed device type must not silently change that reference canvas.
+        if d.get("isAvailable") and d.get("deviceTypeIdentifier")=="com.apple.CoreSimulator.SimDeviceType.iPhone-17":
+            choices.append(((int(match[1]),int(match[2]),d.get("state")=="Booted"),d["udid"]))
+if not choices: sys.exit("No iOS 27+ iPhone 17 Simulator is installed; the native layout fixtures require that device")
 print(max(choices)[1])')"
 xcrun simctl boot "$udid" 2>/dev/null || true
 xcrun simctl bootstatus "$udid" -b
 result="build/test-results/TruongCam-$(date -u +%Y%m%dT%H%M%SZ)-$$.xcresult"
-echo "Testing on $udid; result: $result"
+xcodebuild -version
+echo "Testing on iPhone 17 ($udid); result: $result"
 status=0
 xcodebuild -project TruongCam.xcodeproj -scheme TruongCam -configuration Debug \
   -destination "platform=iOS Simulator,id=$udid" -derivedDataPath build/SimulatorDerivedData \

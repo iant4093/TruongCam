@@ -116,11 +116,11 @@ bash scripts/lint.sh
 # Portable storage, metadata, math and state-machine regression cases
 bash scripts/verify-logic.sh
 
-# Real native XCTest execution on an available iOS 27+ iPhone Simulator
+# Real native XCTest execution on an iOS 27+ iPhone 17 Simulator
 bash scripts/test.sh native
 ```
 
-Native CI fails if the Simulator is unavailable; it does not silently replace native tests with portable tests. Result bundles and logs are written under the ignored `build/` directory. Detailed timing prints and the diagnostics screen are Debug-only. Release keeps local failure diagnostics through iOS-managed unified logging, without an app-owned growing text log.
+Native layout tests use an explicit iPhone 17 reference device, including when a newer runtime has other iPhone models installed. CI fails if that Simulator is unavailable; it does not silently replace native tests with portable tests. Result bundles and logs are written under the ignored `build/` directory. Detailed timing prints and the diagnostics screen are Debug-only. Release keeps local failure diagnostics through iOS-managed unified logging, without an app-owned growing text log.
 
 ## CI and releases
 
