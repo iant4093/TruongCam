@@ -25,6 +25,6 @@ status=0
 xcodebuild -project TruongCam.xcodeproj -scheme TruongCam -configuration Debug \
   -destination "platform=iOS Simulator,id=$udid" -derivedDataPath build/SimulatorDerivedData \
   -parallel-testing-enabled NO -collect-test-diagnostics never \
-  -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test > build/logs/test-native.log 2>&1 || status=$?
+  -resultBundlePath "$result" CODE_SIGNING_ALLOWED=NO test 2>&1 | tee build/logs/test-native.log || status=$?
 tail -30 build/logs/test-native.log
 exit "$status"

@@ -26,10 +26,53 @@ jobs:
       - name: actionlint, zizmor and Gitleaks
         run: bash scripts/check-workflows.sh
 
-  ios:
-    name: Swift, tests and device build
+  logic:
+    name: SwiftLint and portable tests
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: SwiftLint
+        run: bash scripts/lint.sh
+      - name: Portable regression tests
+        run: bash scripts/verify-logic.sh
+      - name: Upload portable test logs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: portable-test-logs
+          path: build/logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  native:
+    name: Native Simulator tests
+    runs-on: xcode-27
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Native Simulator tests
+        timeout-minutes: 20
+        run: bash scripts/test.sh native
+      - name: Upload native results and logs
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: native-test-results
+          path: |
+            build/logs/
+            build/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  device:
+    name: Device build and security analysis
+    runs-on: xcode-27
+    timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
@@ -46,12 +89,6 @@ jobs:
           sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
           test "${sdk%%.*}" -ge 27
           printf 'TRUONGCAM_BUILD_NUMBER=%s\n' "$((1000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-      - name: SwiftLint
-        run: bash scripts/lint.sh
-      - name: Portable regression tests
-        run: bash scripts/verify-logic.sh
-      - name: Native Simulator tests
-        run: bash scripts/test.sh native
       - name: Initialize CodeQL
         uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
@@ -90,20 +127,18 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
-      - name: Upload test results and logs
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: test-results-and-logs
-          path: |
-            build/logs/
-            build/test-results/
+          name: device-build-logs
+          path: build/logs/
           if-no-files-found: ignore
           retention-days: 7
 
   release:
     name: Publish latest IPA
-    needs: [quality, ios]
+    needs: [quality, logic, native, device]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10

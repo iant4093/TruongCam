@@ -113,13 +113,11 @@ final class LoupeChromeLayoutNativeTests: XCTestCase {
         return try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     }
 
-    @MainActor private func raster(_ window: UIWindow, name: String) throws -> (Int, Int, [UInt8]) {
+    @MainActor private func raster(_ window: UIWindow, name: String, onlyWhenLoupeVisible: Bool = false) throws -> (Int, Int, [UInt8]) {
         let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
         let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
-        let attachment = XCTAttachment(image: image); attachment.name = name
-        attachment.lifetime = .keepAlways; add(attachment)
         let bitmap = try XCTUnwrap(image.cgImage), width = bitmap.width, height = bitmap.height
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
         let drew = bytes.withUnsafeMutableBytes { buffer -> Bool in
@@ -129,7 +127,18 @@ final class LoupeChromeLayoutNativeTests: XCTestCase {
             context.draw(bitmap, in: CGRect(x: 0, y: 0, width: width, height: height)); return true
         }
         XCTAssertTrue(drew)
+        if !onlyWhenLoupeVisible || redPixelCount(bytes) > 2_000 {
+            let attachment = XCTAttachment(image: image); attachment.name = name
+            attachment.lifetime = .keepAlways; add(attachment)
+        }
         return (width, height, bytes)
+    }
+
+    private func redPixelCount(_ pixels: [UInt8]) -> Int {
+        stride(from: 0, to: pixels.count, by: 4).reduce(into: 0) { count, i in
+            let r = Int(pixels[i]), g = Int(pixels[i + 1]), b = Int(pixels[i + 2])
+            if r > 100 && r > g + 80 && r > b + 80 { count += 1 }
+        }
     }
 
     @MainActor func testShippingCameraScreenKeepsColorLoupeBelowFormatInPortraitBothLandscapesAndLargeText() async throws {
@@ -174,13 +183,22 @@ final class LoupeChromeLayoutNativeTests: XCTestCase {
                 sampleCount: 256, geometryGeneration: geometry.layoutGeneration,
                 configurationGeneration: geometry.configurationGeneration, isFullRange: true, mappedAtUTC: Date())))
             XCTAssertEqual(camera.histogram?.geometryGeneration, geometry.layoutGeneration)
-            let sample = LoupeSnapshot(width: 32, height: 24,
-                rgbaBytes: Array(repeating: [UInt8(250), 0, 0, 255], count: 32 * 24).flatMap { $0 },
-                geometryGeneration: geometry.layoutGeneration, configurationGeneration: geometry.configurationGeneration,
-                magnification: 2, mappedAtUTC: Date())
-            await camera.consumeAnalysisOutput(.loupe(sample))
-            try await Task.sleep(for: .milliseconds(45))
-            let (pixelWidth, pixelHeight, pixels) = try raster(window, name: "histogram54-shipping-camera-\(index)")
+            // This is a layout test, not a 45 ms cold-decoder benchmark.
+            // Feed fresh frames as the camera does, and retain the first actual
+            // rendered frame. Staleness policy and geometry assertions remain.
+            let rgba: [UInt8] = Array(repeating: [UInt8(250), 0, 0, 255], count: 32 * 24).flatMap { $0 }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+            var rendered: (Int, Int, [UInt8])?
+            repeat {
+                let sample = LoupeSnapshot(width: 32, height: 24, rgbaBytes: rgba,
+                    geometryGeneration: geometry.layoutGeneration, configurationGeneration: geometry.configurationGeneration,
+                    magnification: 2, mappedAtUTC: Date())
+                await camera.consumeAnalysisOutput(.loupe(sample))
+                try await Task.sleep(for: .milliseconds(30))
+                let candidate = try raster(window, name: "histogram54-shipping-camera-\(index)", onlyWhenLoupeVisible: true)
+                if redPixelCount(candidate.2) > 2_000 { rendered = candidate; break }
+            } while ContinuousClock.now < deadline
+            let (pixelWidth, pixelHeight, pixels) = try rendered ?? raster(window, name: "histogram54-shipping-camera-\(index)-not-ready")
             let caseLabel = "case \(index), \(size), \(type), \(orientation)"
             let expected = CameraPreviewChromeLayout(size: CGSize(width: width, height: height), hasLoupe: true, hasHistogram: true)
             let loupe = expected.loupe.offsetBy(dx: origin.x, dy: origin.y)

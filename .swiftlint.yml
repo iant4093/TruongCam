@@ -15,7 +15,6 @@ only_rules:
   - prohibited_super_call
   - return_value_from_void_function
   - unneeded_break_in_switch
-  - unused_capture_list
   - valid_ibinspectable
   - weak_delegate
 strict: true
