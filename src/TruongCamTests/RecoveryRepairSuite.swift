@@ -319,6 +319,16 @@ private actor RecoveryEffectLog {
 }
 
 enum RecoveryRepairSuite {
+    /// Executor turns are not elapsed time: a yield loop can finish before the
+    /// retained capture has had time to complete its asynchronous control work.
+    /// Keep real completion predicates and a bounded failure deadline on CI.
+    private static func waitForFixture(_ predicate: @escaping @Sendable () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !predicate(), !Task.isCancelled, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return predicate()
+    }
     static func connectedCase(id: String, coalesceReset: Bool) -> TCCase {
         return TCCase(id: id, title: "Connected retained sequence, reset, restored model and library consumers") { r in
                 // AN03. Every precondition is asserted BEFORE anything depends on it. The earlier
@@ -392,8 +402,7 @@ enum RecoveryRepairSuite {
                     physicalCameraKind: .wide, createdAtUTC: Date(timeIntervalSince1970: 0),
                     timezoneOffsetSeconds: 0, mode: .single)
                 let task = Task { await coordinator.capture(intent: intent) }
-                var turns = 0
-                while spy.attachCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 1 }
                 guard spy.attachCount >= 1 else {
                     r.check("PRECONDITION: submitted to the retained path", false); return
                 }
@@ -1036,8 +1045,7 @@ enum RecoveryRepairSuite {
                     physicalCameraKind: .wide, createdAtUTC: Date(timeIntervalSince1970: 0),
                     timezoneOffsetSeconds: 0, mode: .single)
                 let task = Task { await coordinator.capture(intent: intent) }
-                var turns = 0
-                while spy.attachCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 1 }
                 guard spy.attachCount >= 1 else { r.check("submitted", false); return }
                 gated.holdTimeoutSeconds = 0.2
                 gated.arm()   // armed and NEVER released
@@ -1045,8 +1053,7 @@ enum RecoveryRepairSuite {
                     bytes: StorageFixture.rawBytes(filler: 0x44),
                     dimensions: PixelDimensions(width: 4_032, height: 3_024))
                 spy.captureTicket.deliver(.success)
-                turns = 0
-                while gated.enteredCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { gated.enteredCount >= 1 }
                 guard gated.enteredCount >= 1 else { r.check("commit invoked", false); return }
                 let result = await task.value
                 r.equal("the un-released provider hold reports itself EXPIRED",
@@ -1157,8 +1164,7 @@ enum RecoveryRepairSuite {
                     physicalCameraKind: .wide, createdAtUTC: Date(timeIntervalSince1970: 0),
                     timezoneOffsetSeconds: 0, mode: .single)
                 let task = Task { await coordinator.capture(intent: intent) }
-                var turns = 0
-                while spy.attachCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 1 }
                 guard spy.attachCount >= 1 else { r.check("submitted", false); return }
                 r.equal("the gate holds the submission obligation before the cancel",
                         gate.outstandingCount, 1)
@@ -1199,8 +1205,7 @@ enum RecoveryRepairSuite {
                         timezoneOffsetSeconds: 0, mode: .single)
                 }
                 let failTask = Task { await coordinator.capture(intent: intent()) }
-                var turns = 0
-                while spy.attachCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 1 }
                 guard spy.attachCount >= 1 else { r.check("submitted", false); return }
                 // NO representation is published: the failure order under test is "terminal
                 // failed with no delivered source", which must commit nothing. (A failure AFTER a
@@ -1214,8 +1219,7 @@ enum RecoveryRepairSuite {
                 // The SAME graph still admits a later capture (reset/order recovery).
                 await coordinator.resumeAdmittingNewRequests()
                 let laterTask = Task { await coordinator.capture(intent: intent()) }
-                turns = 0
-                while spy.attachCount < 2 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 2 }
                 r.check("and the SAME graph still admits a later capture after that failure",
                         spy.attachCount >= 2)
                 laterTask.cancel()
@@ -1341,13 +1345,11 @@ enum RecoveryRepairSuite {
                 // (3) The REAL coordinator drains the request whose intent was submitted.
                 spy.holdAttachments()
                 let task = Task { await coordinator.capture(intent: submitted) }
-                var turns = 0
-                while spy.attachArrivals < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachArrivals >= 1 }
                 r.equal("the real coordinator ARRIVED at the native submission boundary",
                         spy.attachArrivals, 1)
                 spy.releaseAttachments()
-                turns = 0
-                while spy.attachCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 1 }
                 r.check("and it submitted to the real camera surface", spy.attachCount >= 1)
                 r.check("the coordinator is holding the request bound to the SUBMITTED intent",
                         recoveryRequestIdentity(spy.captureTicket.request) == boundRequestIdentity)
@@ -1550,8 +1552,7 @@ enum RecoveryRepairSuite {
                     timezoneOffsetSeconds: 0,
                     mode: .single)
                 let firstTask = Task { await coordinator.capture(intent: firstIntent) }
-                var turns = 0
-                while spy.attachCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 1 }
                 r.check("the first real capture submitted", spy.attachCount >= 1)
                 r.equal("and the actual request retained the submitted library",
                         spy.captureTicket.request.intent.libraryID, harness.libraryID)
@@ -1568,8 +1569,7 @@ enum RecoveryRepairSuite {
                 // INVOKED and parks INSIDE the provider operation.
                 gated.arm()
                 spy.captureTicket.deliver(.success)
-                turns = 0
-                while gated.enteredCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { gated.enteredCount >= 1 }
                 r.check("the provider commit was INVOKED and is blocked inside the provider",
                         gated.enteredCount >= 1)
                 r.equal("the retained obligation is UNRESOLVED while the commit is in flight",
@@ -1616,8 +1616,7 @@ enum RecoveryRepairSuite {
                         StorageFixture.sha256Hex(firstBytes))
                 r.check("the first capture left no pending transaction",
                         firstResult.pendingTransactionIDs.isEmpty)
-                turns = 0
-                while gate.outstandingCount > 0 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { gate.outstandingCount <= 0 }
                 r.equal("the surface's own staging reports drained the SAME gate",
                         gate.outstandingCount, 0)
                 r.equal("and the gate reports the drained outcome", gate.outcome(), .drained)
@@ -1656,8 +1655,7 @@ enum RecoveryRepairSuite {
                     timezoneOffsetSeconds: 0,
                     mode: .single)
                 let secondTask = Task { await coordinator.capture(intent: secondIntent) }
-                turns = 0
-                while spy.attachCount < 2 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 2 }
                 r.equal("the NEXT capture was admitted to the native boundary",
                         spy.attachCount, 2)
                 let secondTicket = spy.ticket(for: secondIntent)
@@ -1754,8 +1752,7 @@ enum RecoveryRepairSuite {
                     timezoneOffsetSeconds: 0,
                     mode: .single)
                 let task = Task { await coordinator.capture(intent: intent) }
-                var turns = 0
-                while spy.attachCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { spy.attachCount >= 1 }
                 r.check("the real coordinator submitted on the shared graph", spy.attachCount >= 1)
                 r.equal("and its request retained the submitted library identity",
                         spy.captureTicket.request.intent.libraryID, harness.libraryID)
@@ -1765,8 +1762,7 @@ enum RecoveryRepairSuite {
                             bytes: StorageFixture.rawBytes(filler: 0x33),
                             dimensions: PixelDimensions(width: 4_032, height: 3_024)))
                 spy.captureTicket.deliver(.success)
-                turns = 0
-                while gated.enteredCount < 1 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { gated.enteredCount >= 1 }
                 r.check("the same held provider seam is invoked on the shared graph",
                         gated.enteredCount >= 1)
 
@@ -1802,8 +1798,7 @@ enum RecoveryRepairSuite {
                 gated.release()
                 let result = await task.value
                 r.check("the shared-graph capture committed", result.didCommitAnything)
-                turns = 0
-                while gate.outstandingCount > 0 && turns < 20_000 { await Task.yield(); turns += 1 }
+                _ = await waitForFixture { gate.outstandingCount <= 0 }
                 r.equal("the shared gate drained", gate.outstandingCount, 0)
 
                 // The REAL library model consumes the committed receipt through the shipping

@@ -24,7 +24,7 @@ TruongCam captures individual originals without merging or editing the RAW data.
 
 ## Screenshots
 
-Simulator UI examples with staged photo content and illustrative camera readings. Photography is from [my Stagman Ridge hike](https://iantruongphotography.com/album/stagman-ridge-10-3), part of the [Hikes collection](https://iantruongphotography.com/sections/photo/Hikes).
+Full-screen iPhone 17 Simulator captures at 1206 × 2622, with system safe areas, staged photo content and illustrative camera readings. Photography is from [my Stagman Ridge hike](https://iantruongphotography.com/album/stagman-ridge-10-3), part of the [Hikes collection](https://iantruongphotography.com/sections/photo/Hikes).
 
 <table>
   <tr>
@@ -33,7 +33,7 @@ Simulator UI examples with staged photo content and illustrative camera readings
       <p align="center"><sub><b>Camera</b> · viewfinder, preview aids and direct controls</sub></p>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/tools.webp" width="100%" alt="Capture tools with green controls for the grid, histogram and level, plus focus peaking, zebras and the focus loupe">
+      <img src="docs/screenshots/tools.webp" width="100%" alt="Capture tools presented as a sheet, with controls for the grid, histogram, level, focus peaking, zebras and focus loupe">
       <p align="center"><sub><b>Capture tools</b> · composition and focusing aids</sub></p>
     </td>
   </tr>
