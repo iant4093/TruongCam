@@ -66,8 +66,14 @@ final class LibraryPreviewFixture: ThumbnailProviding, @unchecked Sendable {
 
 enum LibraryPerformanceSuite {
     static func waitUntil(_ predicate: @escaping @Sendable () -> Bool) async -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
-        while !predicate(), ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(2)) }
+        // This waits for fixture/worker readiness, not a latency benchmark.
+        // Hosted Simulator scheduling can exceed one second. Keep the wait
+        // bounded below HeldLibraryDecode's five-second deadlock watchdog;
+        // assertions still verify the actual hold, ownership and publication.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while !predicate(), !Task.isCancelled, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(2))
+        }
         return predicate()
     }
     static let suite = TCSuite(id: "LibraryPerformance", title: "Bounded cold library reads and current-root publication", cases: [

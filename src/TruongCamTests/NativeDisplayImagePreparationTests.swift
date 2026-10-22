@@ -79,7 +79,7 @@ final class NativeDisplayImagePreparationTests: XCTestCase {
         XCTAssertTrue(replacementRead)
         firstHold.release()
         let secondEntered = await LibraryPerformanceSuite.waitUntil { secondHold.didEnter }
-        XCTAssertTrue(secondEntered)
+        XCTAssertTrue(secondEntered, "The current viewer conversion must enter its controlled worker hold")
         await old.value
         guard case .loading = model.state else { return XCTFail("Old grid pixels cannot become the new viewer") }
         let sameCurrent = Task { await model.loadViewerAndWait(card: cards[1], source: source, sourceRevision: 2, rootState: h.store.rootState) }
