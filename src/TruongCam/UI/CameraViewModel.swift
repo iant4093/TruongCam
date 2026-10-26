@@ -1245,19 +1245,22 @@ final class CameraViewModel {
         case .focus, .whiteBalance, .exposureBias: return true
         }
     }
-    private var needsExposureReset: Bool {
-        (isShutterManual || isISOManual || isApertureManual)
-            && !(isShutterManual && supportsIndependentAutomatic(.shutter))
-            && !(isISOManual && supportsIndependentAutomatic(.iso))
-            && !(isApertureAvailable && isApertureManual && supportsIndependentAutomatic(.aperture))
-    }
+    /// A named reset is always available when an independent Auto program is
+    /// unsupported. Hardware picker options stay stable throughout a swipe.
     func canSetStripAutomatic(_ panel: CameraPanel) -> Bool {
-        supportsIndependentAutomatic(panel) || (needsExposureReset && [.shutter, .iso, .aperture].contains(panel))
+        switch panel {
+        case .shutter, .iso: return activeFormat != nil
+        case .aperture: return isApertureAvailable
+        case .focus, .whiteBalance, .exposureBias: return true
+        }
+    }
+    private var exposureResetLabel: String {
+        supportsAperture(aperture, exposureMode: .auto) ? "Auto both" : "Auto all"
     }
     func stripAutomaticLabel(_ panel: CameraPanel) -> String {
         if panel == .exposureBias { return "Reset" }
-        if !supportsIndependentAutomatic(panel), needsExposureReset {
-            return aperture.isAutomatic ? "Auto both" : "Auto all"
+        if !supportsIndependentAutomatic(panel) {
+            return panel == .aperture ? "Auto all" : exposureResetLabel
         }
         return "Auto"
     }
@@ -1284,9 +1287,9 @@ final class CameraViewModel {
     }
     func setStripAutomatic(_ panel: CameraPanel) {
         if [.shutter, .iso, .aperture].contains(panel),
-           !supportsIndependentAutomatic(panel), needsExposureReset {
+           !supportsIndependentAutomatic(panel) {
+            if panel == .aperture || !supportsAperture(aperture, exposureMode: .auto) { aperture = .auto }
             exposure = .auto
-            aperture = .auto
             scheduleApply()
             return
         }

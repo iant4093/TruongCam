@@ -70,7 +70,7 @@ enum ExposureModelSuite {
                 r.equal("Auto has no numeric target", ApertureChoice.auto.numericTarget, nil)
                 r.equal("manual target is preserved", ApertureChoice.manual(fNumber: 2.8).numericTarget, 2.8)
             },
-            TCCase(id: "AP02", title: "Asymmetric priority support keeps supported Auto independent and refuses only its unsupported peer") { r in
+            TCCase(id: "AP02", title: "Asymmetric priority support keeps supported Auto independent and labels an unsupported peer reset") { r in
                 for supported in [ExposureModeKind.shutterPriority, .isoPriority] {
                     guard let h = await StorageHarness.make(name: "ap02-\(supported)") else { r.check("fixture", false); continue }
                     let fixture = StartupRepairSuite.controlFixture(modes: [.auto, .manual, supported])
@@ -84,10 +84,11 @@ enum ExposureModelSuite {
                         let permitted: CameraPanel = supported == .shutterPriority ? .iso : .shutter
                         let refused: CameraPanel = supported == .shutterPriority ? .shutter : .iso
                         r.check("supported independent Auto is enabled", model.canSetStripAutomatic(permitted))
-                        r.check("unsupported independent Auto is disabled", !model.canSetStripAutomatic(refused))
+                        r.equal("unsupported independent Auto names its reset", model.stripAutomaticLabel(refused), "Auto both")
                         r.equal("supported action is independently labelled", model.stripAutomaticLabel(permitted), "Auto")
                         model.setStripAutomatic(refused)
-                        r.equal("refused Auto does not reset either manual parameter", model.exposure, .manual(durationSeconds: 0.02, iso: 400))
+                        r.equal("explicit reset restores Auto", model.exposure, .auto)
+                        model.setExposureMode(.manual); model.setDuration(0.02); model.setISO(400)
                         model.setStripAutomatic(permitted)
                         r.equal("supported peer becomes automatic", model.exposure.mode, supported)
                         if supported == .shutterPriority { r.equal("manual shutter preserved", model.exposure.durationTargetSeconds, 0.02) }
@@ -96,9 +97,9 @@ enum ExposureModelSuite {
                         model.openPanel = refused
                     }
                     let refusedHardware = await model.hardwareConfiguration(enabled: true)
-                    r.check("hardware cannot advertise unsupported Auto", refusedHardware.selections.allSatisfy { selection in
-                        !selection.domain.options.contains { $0.value == .automatic }
-                    })
+                    r.check("hardware names the unsupported transition as a whole-program reset", refusedHardware.selections.first?.domain.options.contains {
+                        $0.value == .automatic && $0.title == "Auto both"
+                    } == true)
                     await MainActor.run { model.openPanel = supported == .shutterPriority ? .iso : .shutter }
                     let allowedHardware = await model.hardwareConfiguration(enabled: true)
                     guard let picker = allowedHardware.selections.first,
@@ -197,10 +198,11 @@ enum ExposureModelSuite {
                     r.equal("refused aperture does not make shutter or ISO manual", model.exposure, .auto)
                     model.setExposureMode(.manual); model.setDuration(0.02); model.setISO(400); model.setAperture(2.8)
                     r.check("legal whole manual combination accepts the aperture", model.isApertureManual)
-                    r.check("manual-aperture matrix blocks unsupported Auto ISO", !model.canSetStripAutomatic(.iso))
+                    r.equal("unsupported Auto ISO explicitly names the whole-program reset", model.stripAutomaticLabel(.iso), "Auto all")
                     model.setStripAutomatic(.iso)
-                    r.equal("rejected Auto ISO preserves manual exposure", model.exposure, .manual(durationSeconds: 0.02, iso: 400))
-                    r.equal("rejected Auto ISO preserves aperture", model.selectedApertureValue, 2.8)
+                    r.equal("named reset restores automatic exposure", model.exposure, .auto)
+                    r.check("named reset restores required automatic aperture", model.aperture.isAutomatic)
+                    model.setExposureMode(.manual); model.setDuration(0.02); model.setISO(400); model.setAperture(2.8)
                     model.setStripAutomatic(.aperture)
                     r.check("allowed Auto aperture changes just aperture", !model.isApertureManual)
                     r.equal("Auto aperture preserves manual shutter and ISO", model.exposure, .manual(durationSeconds: 0.02, iso: 400))
@@ -235,6 +237,26 @@ enum ExposureModelSuite {
                 r.equal("known aperture with absent source EXIF remains unknown", ev(4, nil), nil)
                 r.equal("invalid source f-number remains unknown", ev(4, .nan), nil)
                 r.equal("legacy fixed-aperture baseline retains its calculation", ev(nil, nil), 0)
+            },
+            TCCase(id: "AP07", title: "Camera Control domain survives an Auto-to-paired-Manual transition under manual aperture") { r in
+                guard let h = await StorageHarness.make(name: "ap07-domain") else { r.check("fixture", false); return }
+                var fixture = StartupRepairSuite.controlFixture(modes: Set(ExposureModeKind.allCases))
+                fixture.physicalCameras[0].formats[0].apertureCapability = apertureCapability(manualModes: [.auto, .manual])
+                let model = await CameraViewModel(camera: SyntheticCameraService(capability: fixture),
+                    capture: CaptureCoordinator(camera: ChainCameraSpy(), store: h.store, clock: SystemMonotonicClock()),
+                    metering: MeteringService(clock: SystemMonotonicClock()), preferences: SyntheticPreferenceStore(), levelFeed: SyntheticLevelFeed())
+                await model.start()
+                await MainActor.run { model.setAperture(2.8); model.openPanel = .iso }
+                let initial = await model.hardwareConfiguration(enabled: true).selections.first?.domain
+                await model.adjustISOFromStrip(400)
+                r.equal("the supported whole Manual program is selected", await model.exposure.mode, .manual)
+                let manual = await model.hardwareConfiguration(enabled: true).selections.first?.domain
+                r.equal("subsequent swipe retains the exact picker domain", manual, initial)
+                r.check("reset title is explicit before and after seeding", manual?.options.first?.title == "Auto both")
+                await model.setStripAutomatic(.iso)
+                r.equal("explicit paired reset restores ISO/shutter Auto", await model.exposure, .auto)
+                r.equal("supported manual aperture is preserved by the reset", await model.aperture, .manual(fNumber: 2.8))
+                await model.stop()
             },
             TCCase(id: "T01", title: "Auto -> manual ISO -> manual shutter -> Auto ISO transitions") { r in
                 var choice = ExposureChoice.auto
