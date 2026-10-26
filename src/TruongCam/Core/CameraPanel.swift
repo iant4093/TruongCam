@@ -4,6 +4,7 @@ import Foundation
 enum CameraPanel: String, Hashable, Sendable, CaseIterable, Identifiable {
     case shutter
     case iso
+    case aperture
     case focus
     case whiteBalance
     case exposureBias
@@ -14,6 +15,7 @@ enum CameraPanel: String, Hashable, Sendable, CaseIterable, Identifiable {
         switch self {
         case .shutter: return "Shutter"
         case .iso: return "ISO"
+        case .aperture: return "Aperture"
         case .focus: return "Focus"
         case .whiteBalance: return "White balance"
         case .exposureBias: return "Exposure compensation"
@@ -24,7 +26,7 @@ enum CameraPanel: String, Hashable, Sendable, CaseIterable, Identifiable {
 /// Hardware swipes express the same discrete intent as the on-screen rulers.
 /// No hardware callback is allowed to write directly to a native camera device.
 enum HardwareControlKind: String, Hashable, Sendable {
-    case lenses, shutter, iso, focus, temperature, tint, exposureBias
+    case lenses, shutter, iso, aperture, focus, temperature, tint, exposureBias
 }
 enum HardwareControlValue: Hashable, Sendable {
     case automatic, number(Double), lens(PhysicalCameraKind)

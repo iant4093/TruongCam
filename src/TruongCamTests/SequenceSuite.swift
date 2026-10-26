@@ -1872,6 +1872,36 @@ enum SequenceSuite {
 
             // MARK: Baseline settlement
 
+            TCCase(id: "APSEQ01", title: "Variable aperture is measured, stabilized, frozen and preserved during bracket preparation") { r in
+                let stable = (0..<5).map { _ -> BaselineReadback in
+                    var value = tcSeqStableReadback(); value.lensAperture = 2.8
+                    return value
+                }
+                let requirements: BaselineSettlementRequirements = [.exposure, .aperture]
+                r.check("five fresh constant apertures settle", BaselineSettler.stabilityReport(window: stable,
+                    requirements: requirements, policy: .initial).isStable)
+                var missing = stable; missing[2].lensAperture = nil
+                r.check("missing physical aperture refuses baseline", !BaselineSettler.stabilityReport(window: missing,
+                    requirements: requirements, policy: .initial).isStable)
+                var moving = stable; moving[2].lensAperture = 4
+                r.check("diaphragm movement refuses baseline", !BaselineSettler.stabilityReport(window: moving,
+                    requirements: requirements, policy: .initial).isStable)
+                let request = BaselineSettlementRequest(sequenceID: SequenceID(), intent: .freezeNumeric,
+                    requirements: requirements, longestPlannedDurationSeconds: 0.01,
+                    fallbackExposure: .auto, fallbackFocus: FocusIntent(mode: .continuousAuto, position: nil, pointOfInterest: nil),
+                    fallbackWhiteBalance: WhiteBalanceIntent(mode: .auto, temperatureAndTint: nil), maxDimensions: PixelDimensions(width: 4000, height: 3000),
+                    explicitBaseline: nil, fallbackAperture: .auto)
+                let frozen = BaselineSettler.snapshot(request: request, window: stable, requirements: requirements)
+                r.equal("frozen aperture uses the measured target", frozen.aperture, .manual(fNumber: 2.8))
+                r.equal("bracket EV baseline includes measured aperture", frozen.exposureBaseline?.aperture, 2.8)
+                let prior = SequenceSettingsSnapshot(configurationGeneration: .zero, revision: 1,
+                    exposure: .auto, biasEV: 0, focus: FocusIntent(mode: .continuousAuto, position: nil, pointOfInterest: nil),
+                    whiteBalance: WhiteBalanceIntent(mode: .auto, temperatureAndTint: nil), maxDimensions: request.maxDimensions,
+                    aperture: .manual(fNumber: 2.8))
+                r.equal("focus preparation preserves aperture for restoration",
+                    SequenceBaselineFocusPreparation.lockedSettings(prior, observedPosition: 0.5)?.aperture,
+                    .manual(fNumber: 2.8))
+            },
             TCCase(id: "T34a",
                    title: "Automatic baseline settlement requires five consecutive stable readbacks") { r in
                 let policy = BaselineSettlementPolicy.initial

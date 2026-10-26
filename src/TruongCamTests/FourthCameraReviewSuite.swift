@@ -42,7 +42,7 @@ private actor FourthReviewCamera: CameraServicing, CaptureCameraSurface {
     func recordMeasuredRAWDimensions(_ dimensions: PixelDimensions, evidenceOrigin: String) async {}
 
     func applyControls(revision: UInt64, exposure: ExposureChoice, biasEV: Double,
-                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent) async -> Result<AppliedControlSnapshot, CaptureFailure> {
+                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         applications += 1
         applicationRevisions.append(revision)
         let invocation = applications
@@ -276,7 +276,7 @@ enum FourthCameraReviewSuite {
                     case .whiteBalance:
                         r.equal("WB seeds measured temperature", await model.whiteBalance.temperatureAndTint?.temperature, 4700)
                         r.equal("WB preserves measured tint", await model.whiteBalance.temperatureAndTint?.tint, 12)
-                    case .exposureBias: break
+                    case .exposureBias, .aperture: break
                     }
                     r.check("manual seed reaches actual interactive setter", await waitUntil { await camera.applications == beforeApplications + 2 })
                     r.equal("hardware seed takes no new photo", await camera.submitted, 1)

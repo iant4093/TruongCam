@@ -92,19 +92,13 @@ struct CaptureRequestResult: Hashable, Sendable {
 /// Narrow camera surface the coordinator depends on. `CameraServicing` conforms
 /// structurally through the production service; tests use a fake.
 @preconcurrency
-protocol CaptureCameraSurface: Sendable {
+protocol CaptureCameraSurface: CameraControlApplying {
     var lifecycle: CameraLifecycle { get async }
     var capabilitySnapshot: CameraCapabilitySnapshot { get async }
     func beginCapture(intent: CaptureIntent) async -> any CaptureRequestTicket
-    func applyControls(
-        revision: UInt64,
-        exposure: ExposureChoice,
-        biasEV: Double,
-        focus: FocusIntent,
-        whiteBalance: WhiteBalanceIntent
-    ) async -> Result<AppliedControlSnapshot, CaptureFailure>
     func currentControlReadback() async -> AppliedControlSnapshot?
 }
+
 
 #if canImport(AVFoundation) && !TC_PORTABLE_VERIFIER
 extension AVCaptureCameraService: CaptureCameraSurface {}
@@ -326,7 +320,7 @@ actor CaptureCoordinator {
             exposure: intent.exposure,
             biasEV: intent.biasEV,
             focus: intent.focus,
-            whiteBalance: intent.whiteBalance)
+            whiteBalance: intent.whiteBalance, aperture: intent.aperture)
         #if DEBUG
         print("TruongCam timing control-application-ack=\(Int((clock.now() - controlsBegan) * 1000))ms capture=\(intent.captureID) exposure=\(intent.exposure.mode.rawValue) focus=\(intent.focus.mode.rawValue) wb=\(intent.whiteBalance.mode.rawValue)")
         #endif
@@ -483,12 +477,12 @@ actor CaptureCoordinator {
     ) -> Bool {
         if applicationIsComplete(snapshot, for: intent) { return true }
         guard intent.mode == .single, intent.sequenceID == nil, intent.sequenceOrdinal == nil,
-              intent.exposure.mode == .auto, intent.focus.mode == .continuousAuto,
+              intent.exposure.mode == .auto, intent.aperture.isAutomatic, intent.focus.mode == .continuousAuto,
               intent.whiteBalance.mode == .auto,
               snapshot.generation == intent.configurationGeneration,
               snapshot.requestRevision == controlRevision(for: intent),
               snapshot.settlement.isLiveObservation,
-              snapshot.exposureChoice.mode == .auto,
+              snapshot.exposureChoice.mode == .auto, intent.aperture.matches(readback: snapshot),
               (snapshot.focusMode == .continuousAuto || (snapshot.isFixedFocusCamera && snapshot.isFocusAdjusting == false)), snapshot.whiteBalanceMode == .auto,
               closeEnough(snapshot.biasEV, intent.biasEV),
               let duration = snapshot.observedDurationSeconds, duration.isFinite, duration > 0,
@@ -518,6 +512,7 @@ actor CaptureCoordinator {
         // J01: the MODE must agree before any numeric comparison. A manual snapshot
         // cannot authorize an Auto request merely because Auto pins no number.
         guard snapshot.exposureChoice.mode == intent.exposure.mode else { return false }
+        guard intent.aperture.matches(readback: snapshot) else { return false }
         // Bias is an applied value too, so a reading taken under a different bias is not
         // this request's.
         guard closeEnough(snapshot.biasEV, intent.biasEV) else { return false }
@@ -1024,7 +1019,9 @@ actor CaptureCoordinator {
                     mode: intent.exposure.mode,
                     durationSeconds: intent.exposure.durationTargetSeconds,
                     iso: intent.exposure.isoTarget,
-                    biasEV: intent.biasEV),
+                    biasEV: intent.biasEV,
+                    apertureMode: intent.aperture.isAutomatic ? "auto" : "manual",
+                    aperture: intent.aperture.numericTarget),
                 focus: FocusRequestRecord(mode: intent.focus.mode, position: intent.focus.position),
                 whiteBalance: WhiteBalanceRequestRecord(
                     mode: intent.whiteBalance.mode,
@@ -1088,7 +1085,8 @@ actor CaptureCoordinator {
                 baselineISO: intent.baselineISO,
                 baselineDurationSeconds: intent.baselineDurationSeconds,
                 sourceISO: sourceEXIF.isoSpeed,
-                sourceDurationSeconds: sourceEXIF.exposureTimeSeconds),
+                sourceDurationSeconds: sourceEXIF.exposureTimeSeconds,
+                baselineAperture: intent.baselineAperture, sourceAperture: sourceEXIF.aperture),
             deadlineOrdinal: intent.deadlineOrdinal)
     }
 
@@ -1104,7 +1102,9 @@ actor CaptureCoordinator {
         baselineISO: Double?,
         baselineDurationSeconds: Double?,
         sourceISO: Double?,
-        sourceDurationSeconds: Double?
+        sourceDurationSeconds: Double?,
+        baselineAperture: Double? = nil,
+        sourceAperture: Double? = nil
     ) -> Double? {
         // No requested offset means the plan did not ask for one, so there is nothing
         // to compare against.
@@ -1120,7 +1120,13 @@ actor CaptureCoordinator {
         let baselineProduct = baselineISO * baselineDuration
         let sourceProduct = sourceISO * sourceDuration
         guard baselineProduct > 0, sourceProduct > 0 else { return nil }
-        let actual = log2(sourceProduct / baselineProduct)
+        var ratio = sourceProduct / baselineProduct
+        if let baselineAperture {
+            guard baselineAperture.isFinite, baselineAperture > 0,
+                  let sourceAperture, sourceAperture.isFinite, sourceAperture > 0 else { return nil }
+            ratio *= pow(baselineAperture / sourceAperture, 2)
+        }
+        let actual = log2(ratio)
         return actual.isFinite ? actual : nil
     }
 

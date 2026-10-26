@@ -1285,6 +1285,7 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
             activeRequestCeiling: facts.requestCeiling,
             activeExposureLimits: facts.exposureLimits,
             activePriorityCombinations: facts.priorityCombinations,
+            activeApertureCapability: facts.apertureCapability,
             activeCleanAperture: facts.cleanAperture,
             activeFrameRates: facts.frameRates)
     }
@@ -1298,6 +1299,7 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
         activeRequestCeiling: [PixelDimensions]? = nil,
         activeExposureLimits: ExposureLimits? = nil,
         activePriorityCombinations: Set<ExposureModeKind>? = nil,
+        activeApertureCapability: ApertureCapability? = nil,
         activeCleanAperture: PixelDimensions?? = nil,
         activeFrameRates: [ClosedRange<Double>]? = nil
     ) {
@@ -1334,6 +1336,10 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
             if let activePriorityCombinations {
                 snapshot.physicalCameras[index].formats[formatIndex]
                     .supportedPriorityCombinations = activePriorityCombinations
+            }
+            if let activeApertureCapability {
+                snapshot.physicalCameras[index].formats[formatIndex]
+                    .apertureCapability = activeApertureCapability
             }
             if let activeCleanAperture {
                 snapshot.physicalCameras[index].formats[formatIndex]
@@ -1481,27 +1487,9 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
             }
             // U03: the ACTIVE format's own exposure limits, so a changed format cannot keep
             // the previous format's ISO/duration claims.
-            var activeCombinations: Set<ExposureModeKind> = [.auto]
-            if device.isExposureModeSupported(.custom) {
-                if activeFormat.supportsExposureModeCustom(
-                    lensAperture: AVCaptureDevice.currentLensAperture,
-                    duration: AVCaptureDevice.currentExposureDuration,
-                    iso: AVCaptureDevice.autoISO) {
-                    activeCombinations.insert(.shutterPriority)
-                }
-                if activeFormat.supportsExposureModeCustom(
-                    lensAperture: AVCaptureDevice.currentLensAperture,
-                    duration: AVCaptureDevice.autoExposureDuration,
-                    iso: AVCaptureDevice.currentISO) {
-                    activeCombinations.insert(.isoPriority)
-                }
-                if activeFormat.supportsExposureModeCustom(
-                    lensAperture: AVCaptureDevice.currentLensAperture,
-                    duration: AVCaptureDevice.currentExposureDuration,
-                    iso: AVCaptureDevice.currentISO) {
-                    activeCombinations.insert(.manual)
-                }
-            }
+            let aperture = CameraCapabilityProbe.apertureCapability(for: activeFormat,
+                supportsCustomExposure: device.isExposureModeSupported(.custom))
+            let activeCombinations = aperture.autoExposureModes
             let activeCleanAperture: PixelDimensions? = {
                 let aperture = CMVideoFormatDescriptionGetCleanAperture(
                     activeFormat.formatDescription, originIsAtTopLeft: true)
@@ -1528,7 +1516,8 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
                     exposureLimits: activeLimits,
                     priorityCombinations: activeCombinations,
                     cleanAperture: activeCleanAperture,
-                    frameRates: activeFrameRates)
+                    frameRates: activeFrameRates,
+                    apertureCapability: aperture)
         }
 
     }
@@ -1737,7 +1726,7 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
                     exposure: applied.exposure,
                     biasEV: applied.biasEV,
                     focus: applied.focus,
-                    whiteBalance: applied.whiteBalance, ownedByReset: passToken) {
+                    whiteBalance: applied.whiteBalance, aperture: applied.aperture, ownedByReset: passToken) {
                 case .success: return .success(())
                 case .failure(let failure): return .failure(failure)
                 }
@@ -1922,11 +1911,12 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
         exposure: ExposureChoice,
         biasEV: Double,
         focus: FocusIntent,
-        whiteBalance: WhiteBalanceIntent
+        whiteBalance: WhiteBalanceIntent,
+        aperture: ApertureChoice = .auto
     ) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         await applyControls(
             revision: revision, exposure: exposure, biasEV: biasEV,
-            focus: focus, whiteBalance: whiteBalance, ownedByReset: nil)
+            focus: focus, whiteBalance: whiteBalance, aperture: aperture, ownedByReset: nil)
     }
 
     /// AP01: the reset-owned variant. Ordinary callers use the protocol-shaped entry point above,
@@ -1938,6 +1928,7 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
         biasEV: Double,
         focus: FocusIntent,
         whiteBalance: WhiteBalanceIntent,
+        aperture: ApertureChoice = .auto,
         ownedByReset: UInt64?
     ) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         let operationResetPass = ownedByReset ?? recoveryPassToken
@@ -1957,7 +1948,7 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
         // generation happens to be live when the native result returns.
         let generationAtIssue = generation
         let instruction = NativeControlInstruction(
-            exposure: exposure, biasEV: biasEV, focus: focus, whiteBalance: whiteBalance)
+            exposure: exposure, biasEV: biasEV, focus: focus, whiteBalance: whiteBalance, aperture: aperture)
         let limits = activeFormatExposureLimits()
         let focusLimits = activeFormatFocusLimits()
         let whiteBalanceLimits = activeFormatWhiteBalanceLimits()
@@ -2298,6 +2289,10 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
             if wantsTemperatureAndTint {
                 snapshot.observedWhiteBalanceTemperatureAndTint = CameraControlBinding.observedTemperatureAndTint(gains: observedGains, device: device)
             }
+            snapshot.isFixedApertureCamera = CameraControlBinding.isFixedApertureCamera(device)
+            snapshot.isApertureAutomatic = device.automaticallyAdjustsLensAperture
+            snapshot.apertureChoice = snapshot.isFixedApertureCamera || device.automaticallyAdjustsLensAperture
+                ? .auto : .manual(fNumber: Double(device.lensAperture))
             return snapshot
         }
         if var observed {
@@ -2345,10 +2340,10 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
         for instruction: NativeControlInstruction
     ) -> ControlSettlementPolicy.Target {
         var target = ControlSettlementPolicy.Target()
-        if instruction.exposure.mode == .manual {
-            target.durationSeconds = instruction.exposure.durationTargetSeconds
-            target.iso = instruction.exposure.isoTarget
-        }
+        target.durationSeconds = instruction.exposure.durationTargetSeconds
+        target.iso = instruction.exposure.isoTarget
+        target.lensAperture = instruction.aperture.numericTarget
+        target.apertureAutomatic = instruction.aperture.isAutomatic
         if let position = instruction.focus.position, instruction.focus.mode == .manual {
             target.focusPosition = position
         }
@@ -2565,7 +2560,7 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
             exposure: intent.exposure,
             biasEV: intent.biasEV,
             focus: intent.focus,
-            whiteBalance: intent.whiteBalance)
+            whiteBalance: intent.whiteBalance, aperture: intent.aperture)
     }
 
     /// Forwards the UI's complete analysis request. The bridge preserves every
@@ -2826,7 +2821,7 @@ actor AVCaptureCameraService: CameraServicing, CameraCapabilityProviding, Stagin
             #if DEBUG
             print("TruongCam timing native-settings-construction=\(Int((ProcessInfo.processInfo.systemUptime - settingsBegan) * 1000))ms capture=\(intent.captureID)")
             print("TruongCam photo-request format=\(intent.fileFormat.rawValue) camera=\(intent.physicalCameraKind.rawValue) generation=\(intent.configurationGeneration) requested=\(intent.requestedDimensions.width)x\(intent.requestedDimensions.height) nativeCeiling=\(photoOutput.maxPhotoDimensions.width)x\(photoOutput.maxPhotoDimensions.height) quality=speed capture=\(intent.captureID)")
-            print("TruongCam photo-live duration=\(device.exposureDuration.validatedSeconds.map { String($0) } ?? "unknown") iso=\(device.iso) adjustingExposure=\(device.isAdjustingExposure) adjustingFocus=\(device.isAdjustingFocus) capture=\(intent.captureID)")
+            print("TruongCam photo-live duration=\(device.exposureDuration.validatedSeconds.map { String($0) } ?? "unknown") iso=\(device.iso) aperture=\(device.lensAperture) apertureAuto=\(device.automaticallyAdjustsLensAperture) adjustingExposure=\(device.isAdjustingExposure) adjustingFocus=\(device.isAdjustingFocus) capture=\(intent.captureID)")
             #endif
 
             // Native files are unmirrored even when the front preview is mirrored.

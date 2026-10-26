@@ -116,6 +116,9 @@ struct AppliedControlSnapshot: Hashable, Sendable {
     /// Optional native gain conversion, requested only by the hardware WB UI.
     /// Display data only; never a replacement for measured capture metadata.
     var observedWhiteBalanceTemperatureAndTint: WhiteBalanceTemperatureAndTint? = nil
+    var apertureChoice: ApertureChoice = .auto
+    var isApertureAutomatic: Bool? = nil
+    var isFixedApertureCamera: Bool = false
 }
 
 /// One delivered RAW representation, before any file work.
@@ -253,7 +256,20 @@ protocol CaptureFormatPreparing: Sendable {
     func prepareCaptureFormat(_ format: CaptureFileFormat, generation: ConfigurationGeneration) async
 }
 
-protocol CameraServicing: Sendable {
+protocol CameraControlApplying: Sendable {
+    /// Applies a whole exposure/focus/WB selection as one revision.
+    func applyControls(
+        revision: UInt64,
+        exposure: ExposureChoice,
+        biasEV: Double,
+        focus: FocusIntent,
+        whiteBalance: WhiteBalanceIntent,
+        aperture: ApertureChoice
+    ) async -> Result<AppliedControlSnapshot, CaptureFailure>
+
+}
+
+protocol CameraServicing: CameraControlApplying {
     /// Asynchronous because the conforming service is an actor: a synchronous
     /// requirement would cross an isolation boundary and race.
     var lifecycle: CameraLifecycle { get async }
@@ -264,14 +280,6 @@ protocol CameraServicing: Sendable {
     func stop() async
     func switchPhysicalCamera(to kind: PhysicalCameraKind) async -> Result<CameraCapabilitySnapshot, CaptureFailure>
 
-    /// Applies a whole exposure/focus/WB selection as one revision.
-    func applyControls(
-        revision: UInt64,
-        exposure: ExposureChoice,
-        biasEV: Double,
-        focus: FocusIntent,
-        whiteBalance: WhiteBalanceIntent
-    ) async -> Result<AppliedControlSnapshot, CaptureFailure>
 
     func setFocusPoint(
         normalizedDevicePoint: NormalizedDevicePoint,
@@ -451,4 +459,13 @@ extension CaptureRequestTicket {
         }
     }
     var shutterFeedbackEvents: AsyncStream<CaptureShutterFeedback> { AsyncStream { $0.finish() } }
+}
+
+// Existing callers explicitly request automatic aperture through this overload.
+extension CameraControlApplying {
+    func applyControls(revision: UInt64, exposure: ExposureChoice, biasEV: Double,
+                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent) async -> Result<AppliedControlSnapshot, CaptureFailure> {
+        await applyControls(revision: revision, exposure: exposure, biasEV: biasEV,
+                            focus: focus, whiteBalance: whiteBalance, aperture: .auto)
+    }
 }

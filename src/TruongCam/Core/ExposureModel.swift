@@ -1,5 +1,56 @@
 import Foundation
 
+/// Aperture is independent of the shutter/ISO program. Auto never means
+/// freezing a sampled f-number, and fixed lenses never offer a manual choice.
+enum ApertureChoice: Hashable, Sendable {
+    case auto
+    case manual(fNumber: Double)
+
+    var numericTarget: Double? {
+        if case .manual(let value) = self { return value }
+        return nil
+    }
+    var isAutomatic: Bool { numericTarget == nil }
+
+    func matches(readback: AppliedControlSnapshot) -> Bool {
+        guard isAutomatic == readback.apertureChoice.isAutomatic else { return false }
+        if let target = numericTarget {
+            guard !readback.isFixedApertureCamera, readback.isApertureAutomatic == false,
+                  let measured = readback.lensAperture, measured.isFinite, target.isFinite,
+                  measured > 0, target > 0 else { return false }
+            return abs(measured - target) <= max(0.01, target * 0.01)
+        }
+        return readback.isFixedApertureCamera || readback.isApertureAutomatic != false
+    }
+}
+
+/// Format-specific capability for automatic and locked diaphragm combinations.
+struct ApertureCapability: Hashable, Sendable {
+    let minFNumber: Double
+    let maxFNumber: Double
+    let recommendedStops: [Double]
+    let autoExposureModes: Set<ExposureModeKind>
+    let manualExposureModes: Set<ExposureModeKind>
+
+    var isValid: Bool {
+        minFNumber.isFinite && maxFNumber.isFinite && minFNumber > 0 && maxFNumber >= minFNumber
+    }
+    var isVariable: Bool { isValid && maxFNumber > minFNumber }
+    var selectableStops: [Double] {
+        guard isVariable else { return [] }
+        return Array(Set(recommendedStops.filter {
+            $0.isFinite && $0 >= minFNumber && $0 <= maxFNumber
+        } + [minFNumber, maxFNumber])).sorted()
+    }
+    func supports(_ aperture: ApertureChoice, exposureMode: ExposureModeKind) -> Bool {
+        if let value = aperture.numericTarget {
+            return isVariable && value.isFinite && value >= minFNumber && value <= maxFNumber
+                && manualExposureModes.contains(exposureMode)
+        }
+        return isValid && autoExposureModes.contains(exposureMode)
+    }
+}
+
 // CONTRACTS.md "Identity, values and provenance" and ARCHITECTURE.md "Exposure
 // model": exposure selection is exactly four cases. Auto flags are represented
 // by the case, never by a numeric sentinel. Current constants are not Auto.
@@ -341,5 +392,15 @@ enum ExposureMeterScale {
     static func isClipped(_ offsetEV: Double?) -> Bool {
         guard let offsetEV, offsetEV.isFinite else { return false }
         return abs(offsetEV)>3
+    }
+}
+
+enum ApertureFormatting {
+    static func fNumber(_ value: Double) -> String {
+        guard value.isFinite, value > 0 else { return "—" }
+        var digits = String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
+        while digits.hasSuffix("0") { digits.removeLast() }
+        if digits.hasSuffix(".") { digits.removeLast() }
+        return "ƒ/" + digits
     }
 }

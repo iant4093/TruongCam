@@ -233,7 +233,7 @@ final class ChainCameraSpy: CaptureCameraSurface, StagingOwnershipReporting, @un
         exposure: ExposureChoice,
         biasEV: Double,
         focus: FocusIntent,
-        whiteBalance: WhiteBalanceIntent
+        whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto
     ) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         let generation = mutex.withLock { $0.generation }
         let snapshot = AppliedControlSnapshot(

@@ -115,7 +115,8 @@ struct CameraSequenceCapabilityProvider: SequenceCapabilityProviding {
             exposureLimits: format.exposureLimits,
             focusLimits: format.focusLimits,
             supportsCustomExposureMode: format.supportsCustomExposureMode.value ?? false,
-            supportedExposureModes: format.supportedPriorityCombinations)
+            supportedExposureModes: format.supportedPriorityCombinations,
+            apertureCapability: format.apertureCapability)
     }
 }
 
@@ -188,6 +189,8 @@ enum BracketPathResolver {
                      admission: SequenceAdmissionPolicy) -> ExposureBracketPath {
         guard let kind = capability.selectedCameraKind,
               let physical = capability.camera(kind) else { return .serial }
+        if let index = physical.selectedFormatIndex, physical.formats.indices.contains(index),
+           physical.formats[index].apertureCapability?.isVariable == true { return .serial }
         switch physical.nativeBracketCountDiscovery {
         case .available(let count) where count >= plan.count:
             // The discovered count is real device data, not an assumption.
@@ -233,7 +236,10 @@ struct CameraBaselineSampler: BaselineSampling {
             iso: snapshot.observedISO,
             focusPosition: snapshot.focusPosition,
             whiteBalanceGains: snapshot.whiteBalanceGains,
-            provenance: BaselineReadback.provenance(for: snapshot.settlement))
+            provenance: BaselineReadback.provenance(for: snapshot.settlement),
+            lensAperture: snapshot.lensAperture,
+            isFixedApertureCamera: snapshot.isFixedApertureCamera,
+            apertureAutomatic: snapshot.isApertureAutomatic)
     }
 }
 

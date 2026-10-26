@@ -19,6 +19,8 @@ struct ControlSettlementPolicy: Sendable {
         let redGain: Double?
         let greenGain: Double?
         let blueGain: Double?
+        let lensAperture: Double?
+        let apertureAutomatic: Bool?
 
         /// Rounded to a stable display/tolerance resolution so sensor noise does
         /// not prevent convergence forever.
@@ -27,7 +29,7 @@ struct ControlSettlementPolicy: Sendable {
         /// as agreement between readings: absence of data is not convergence.
         var hasAnyMeasurement: Bool {
             durationSeconds != nil || iso != nil || exposureTargetOffset != nil
-                || focusPosition != nil || redGain != nil || greenGain != nil || blueGain != nil
+                || focusPosition != nil || redGain != nil || greenGain != nil || blueGain != nil || lensAperture != nil
         }
 
         func normalized() -> Observation {
@@ -38,7 +40,8 @@ struct ControlSettlementPolicy: Sendable {
                 focusPosition: Observation.round(focusPosition, digits: 3),
                 redGain: Observation.round(redGain, digits: 3),
                 greenGain: Observation.round(greenGain, digits: 3),
-                blueGain: Observation.round(blueGain, digits: 3))
+                blueGain: Observation.round(blueGain, digits: 3),
+                lensAperture: Observation.round(lensAperture, digits: 3), apertureAutomatic: apertureAutomatic)
         }
 
         /// Engineering convergence tolerances; the request target is still checked
@@ -58,6 +61,8 @@ struct ControlSettlementPolicy: Sendable {
                 && close(redGain,other.redGain,relative:0.01,absolute:0.001)
                 && close(greenGain,other.greenGain,relative:0.01,absolute:0.001)
                 && close(blueGain,other.blueGain,relative:0.01,absolute:0.001)
+                && close(lensAperture,other.lensAperture,relative:0.01,absolute:0.01)
+                && apertureAutomatic == other.apertureAutomatic
         }
 
         static func round(_ value: Double?, digits: Int) -> Double? {
@@ -74,10 +79,13 @@ struct ControlSettlementPolicy: Sendable {
             redGain = snapshot.whiteBalanceGains?.red
             greenGain = snapshot.whiteBalanceGains?.green
             blueGain = snapshot.whiteBalanceGains?.blue
+            lensAperture = snapshot.lensAperture
+            apertureAutomatic = snapshot.isFixedApertureCamera ? true : snapshot.isApertureAutomatic
         }
 
         init(durationSeconds: Double?, iso: Double?, exposureTargetOffset: Double?,
-             focusPosition: Double?, redGain: Double?, greenGain: Double?, blueGain: Double?) {
+             focusPosition: Double?, redGain: Double?, greenGain: Double?, blueGain: Double?,
+             lensAperture: Double? = nil, apertureAutomatic: Bool? = nil) {
             self.durationSeconds = durationSeconds
             self.iso = iso
             self.exposureTargetOffset = exposureTargetOffset
@@ -85,6 +93,8 @@ struct ControlSettlementPolicy: Sendable {
             self.redGain = redGain
             self.greenGain = greenGain
             self.blueGain = blueGain
+            self.lensAperture = lensAperture
+            self.apertureAutomatic = apertureAutomatic
         }
     }
 
@@ -115,17 +125,25 @@ extension ControlSettlementPolicy {
         var redGain: Double?
         var greenGain: Double?
         var blueGain: Double?
+        var lensAperture: Double?
+        var apertureAutomatic: Bool?
 
         static let none = Target()
 
         var isEmpty: Bool {
             durationSeconds == nil && iso == nil && focusPosition == nil
-                && redGain == nil && greenGain == nil && blueGain == nil
+                && redGain == nil && greenGain == nil && blueGain == nil && lensAperture == nil && apertureAutomatic == nil
         }
 
         /// True when every REQUESTED field is present in the observation and within
         /// tolerance of the request.
         func isSatisfied(by observation: Observation) -> Bool {
+            if let apertureAutomatic, observation.apertureAutomatic != apertureAutomatic { return false }
+            if let lensAperture {
+                guard let measured = observation.lensAperture, measured.isFinite, lensAperture.isFinite,
+                      measured > 0, lensAperture > 0,
+                      abs(measured - lensAperture) <= max(0.01, lensAperture * 0.01) else { return false }
+            }
             if let durationSeconds {
                 guard let measured = observation.durationSeconds,
                       isClose(measured, durationSeconds) else { return false }
@@ -273,6 +291,10 @@ struct ControlSettlementTracker: Sendable {
         var target = ControlSettlementPolicy.Target()
         target.durationSeconds = choice.durationTargetSeconds
         target.iso = choice.isoTarget
+        target.lensAperture = snapshot.apertureChoice.numericTarget
+        if !snapshot.isFixedApertureCamera, snapshot.isApertureAutomatic != nil {
+            target.apertureAutomatic = snapshot.apertureChoice.isAutomatic
+        }
         guard !target.isEmpty else { return nil }
         return target
     }

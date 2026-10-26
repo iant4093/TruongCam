@@ -24,6 +24,30 @@ struct CameraDiscoveryResult: Sendable {
 /// Reads capability facts off AVFoundation. Everything is snapshot-valued; no
 /// AVFoundation reference leaves this file.
 struct CameraCapabilityProbe: Sendable {
+    /// Aperture facts belong to the selected format. Probe each automatic/locked
+    /// combination independently; variable lenses need not support every mix.
+    static func apertureCapability(for format: AVCaptureDevice.Format,
+                                   supportsCustomExposure: Bool) -> ApertureCapability {
+        let minimum = Double(format.minLensAperture), maximum = Double(format.maxLensAperture)
+        let stops = format.recommendedLensApertureStops.map(Double.init)
+            .filter { $0.isFinite && $0 > 0 && $0 >= minimum && $0 <= maximum }
+        func modes(aperture: Float) -> Set<ExposureModeKind> {
+            guard supportsCustomExposure else { return [] }
+            return Set(ExposureModeKind.allCases.filter { mode in
+                format.supportsExposureModeCustom(lensAperture: aperture,
+                    duration: mode == .auto || mode == .isoPriority
+                        ? AVCaptureDevice.autoExposureDuration : AVCaptureDevice.currentExposureDuration,
+                    iso: mode == .auto || mode == .shutterPriority
+                        ? AVCaptureDevice.autoISO : AVCaptureDevice.currentISO)
+            })
+        }
+        var automatic = modes(aperture: AVCaptureDevice.autoLensAperture)
+        automatic.insert(.auto) // Ordinary continuous Auto does not require custom exposure.
+        let variable = minimum.isFinite && maximum.isFinite && minimum > 0 && maximum > minimum
+        return ApertureCapability(minFNumber: minimum, maxFNumber: maximum,
+            recommendedStops: Array(Set(stops)).sorted(), autoExposureModes: automatic,
+            manualExposureModes: variable ? modes(aperture: AVCaptureDevice.currentLensAperture) : [])
+    }
     /// Rear physical device types v1 understands. Virtual/composite devices are
     /// recorded for diagnostics but never silently substituted for a lens.
     static let physicalRearDeviceTypes: [AVCaptureDevice.DeviceType] = [
@@ -168,29 +192,8 @@ struct CameraCapabilityProbe: Sendable {
         let isCustomSupported = device.isExposureModeSupported(.custom)
         let supportsCustom: DiscoveryStatus<Bool> = .available(isCustomSupported)
 
-        // Priority combinations are probed with the *Auto* constants, which is
-        // what distinguishes a priority mode from a locked value.
-        var combinations: Set<ExposureModeKind> = [.auto]
-        if isCustomSupported {
-            if format.supportsExposureModeCustom(
-                lensAperture: AVCaptureDevice.currentLensAperture,
-                duration: AVCaptureDevice.currentExposureDuration,
-                iso: AVCaptureDevice.autoISO) {
-                combinations.insert(.shutterPriority)
-            }
-            if format.supportsExposureModeCustom(
-                lensAperture: AVCaptureDevice.currentLensAperture,
-                duration: AVCaptureDevice.autoExposureDuration,
-                iso: AVCaptureDevice.currentISO) {
-                combinations.insert(.isoPriority)
-            }
-            if format.supportsExposureModeCustom(
-                lensAperture: AVCaptureDevice.currentLensAperture,
-                duration: AVCaptureDevice.currentExposureDuration,
-                iso: AVCaptureDevice.currentISO) {
-                combinations.insert(.manual)
-            }
-        }
+        let aperture = apertureCapability(for: format, supportsCustomExposure: isCustomSupported)
+        let combinations = aperture.autoExposureModes
 
         let exposureLimits = ExposureLimits(
             minDurationSeconds: format.minExposureDuration.seconds,
@@ -240,7 +243,8 @@ struct CameraCapabilityProbe: Sendable {
             whiteBalanceLimits: whiteBalanceLimits,
             videoFrameRateRanges: frameRates,
             isVideoStabilizationSupported: format.isVideoStabilizationModeSupported(.standard),
-            secondaryNativeResolutionZoomFactors: format.secondaryNativeResolutionZoomFactors.map { Double($0) })
+            secondaryNativeResolutionZoomFactors: format.secondaryNativeResolutionZoomFactors.map { Double($0) },
+            apertureCapability: aperture)
     }
 }
 

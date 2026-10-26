@@ -19,6 +19,7 @@ struct NativeControlInstruction: Hashable, Sendable {
     let biasEV: Double
     let focus: FocusIntent
     let whiteBalance: WhiteBalanceIntent
+    var aperture: ApertureChoice = .auto
 }
 
 /// The outcome of applying an instruction.
@@ -49,17 +50,20 @@ struct CameraControlBinding: Sendable {
         let whiteBalanceMode: AVCaptureDevice.WhiteBalanceMode
         let biasEV: Float
         let focusPoint: CGPoint?
+        var isApertureAutomatic = true
+        var isFixedApertureCamera = false
     }
 
     static func controlsAlreadyMatchAuto(
         _ instruction: NativeControlInstruction,
         read: () -> AutoState
     ) -> Bool {
-        guard instruction.exposure.mode == .auto,
+        guard instruction.exposure.mode == .auto, instruction.aperture.isAutomatic,
               instruction.focus.mode == .continuousAuto,
               instruction.whiteBalance.mode == .auto else { return false }
         let state = read()
         return state.exposureMode == .continuousAutoExposure
+            && (state.isApertureAutomatic || state.isFixedApertureCamera)
             && state.focusMode == .continuousAutoFocus
             && state.whiteBalanceMode == .continuousAutoWhiteBalance
             && state.biasEV == Float(instruction.biasEV)
@@ -98,13 +102,23 @@ struct CameraControlBinding: Sendable {
         #endif
         // Auto validation never uses the custom-exposure support answer. Avoid
         // entering that native query on the cold ordinary Auto shutter path.
-        let supportsCustom = instruction.exposure.mode != .auto && device.isExposureModeSupported(.custom)
+        let requiresCustom = instruction.exposure.mode != .auto || !instruction.aperture.isAutomatic
+        let supportsCustom = requiresCustom && device.isExposureModeSupported(.custom)
+        guard let lensAperture = apertureValue(instruction.aperture, device: device) else {
+            return .failed(CaptureFailure(kind: .invalidSettings(
+                detail: "The requested aperture is outside this lens's adjustable range."), operation: "applyControls.aperture"))
+        }
+        if !instruction.aperture.isAutomatic,
+           (!supportsCustom || !supportsCombination(instruction.exposure, device: device, limits: limits, aperture: instruction.aperture)) {
+            return .failed(CaptureFailure(kind: .invalidSettings(
+                detail: "The active format does not support this aperture, shutter and ISO combination."), operation: "applyControls.aperture"))
+        }
         let exposureFailures = ExposureValidator.validate(
             choice: instruction.exposure,
             limits: limits,
             supportsCustomExposureMode: supportsCustom,
             supportsCombination: { choice in
-                Self.supportsCombination(choice, device: device, limits: limits)
+                Self.supportsCombination(choice, device: device, limits: limits, aperture: instruction.aperture)
             })
 
         let biasFailure = ExposureValidator.validateBias(instruction.biasEV, limits: limits)
@@ -158,12 +172,15 @@ struct CameraControlBinding: Sendable {
         #if DEBUG
         let proofBegan = ProcessInfo.processInfo.systemUptime
         #endif
+        let fixedAperture = isFixedApertureCamera(device)
         let unchangedAuto = controlsAlreadyMatchAuto(instruction) {
             AutoState(exposureMode: device.exposureMode,
                       focusMode: device.focusMode,
                       whiteBalanceMode: device.whiteBalanceMode,
                       biasEV: device.exposureTargetBias,
-                      focusPoint: instruction.focus.pointOfInterest == nil ? nil : device.focusPointOfInterest)
+                      focusPoint: instruction.focus.pointOfInterest == nil ? nil : device.focusPointOfInterest,
+                      isApertureAutomatic: device.automaticallyAdjustsLensAperture,
+                      isFixedApertureCamera: fixedAperture)
         }
         #if DEBUG
         print("TruongCam timing control-auto-proof=\(Int((ProcessInfo.processInfo.systemUptime - proofBegan) * 1000))ms matched=\(unchangedAuto)")
@@ -233,7 +250,7 @@ struct CameraControlBinding: Sendable {
 
 
 
-            if instruction.exposure.mode == .auto {
+            if !requiresCustom {
                 guard device.isExposureModeSupported(.continuousAutoExposure) else {
                     return .rejected([.unsupportedCombination(instruction.exposure.mode)], focus: nil, whiteBalance: nil)
                 }
@@ -258,14 +275,14 @@ struct CameraControlBinding: Sendable {
                 let iso = instruction.exposure.isoTarget.map { Float($0) } ?? AVCaptureDevice.autoISO
                 completions.expectOne()
                 device.setExposureModeCustom(
-                    lensAperture: AVCaptureDevice.currentLensAperture,
+                    lensAperture: lensAperture,
                     duration: duration,
                     iso: iso,
                     completionHandler: { time in completions.arrive(atDeviceTime: time) })
             }
 
             // Bias only takes effect in an automatic or priority configuration.
-            if instruction.exposure.mode != .manual,
+            if (instruction.exposure.mode != .manual || (instruction.aperture.isAutomatic && !fixedAperture)),
                device.exposureTargetBias != Float(instruction.biasEV) {
                 completions.expectOne()
                 device.setExposureTargetBias(Float(instruction.biasEV), completionHandler: { time in completions.arrive(atDeviceTime: time) })
@@ -364,6 +381,9 @@ struct CameraControlBinding: Sendable {
             capturedAtUTC: Date())
         snapshot.isFixedFocusCamera = !device.isLockingFocusWithCustomLensPositionSupported
             && !device.isFocusModeSupported(.autoFocus) && !device.isFocusModeSupported(.continuousAutoFocus)
+        snapshot.apertureChoice = instruction.aperture
+        snapshot.isApertureAutomatic = device.automaticallyAdjustsLensAperture
+        snapshot.isFixedApertureCamera = fixedAperture
         #if DEBUG
         print("TruongCam timing control-live-readback=\(Int((ProcessInfo.processInfo.systemUptime - readbackBegan) * 1000))ms")
         #endif
@@ -378,40 +398,42 @@ struct CameraControlBinding: Sendable {
     static func supportsCombination(
         _ choice: ExposureChoice,
         device: AVCaptureDevice,
-        limits: ExposureLimits
+        limits: ExposureLimits,
+        aperture: ApertureChoice = .auto
     ) -> Bool {
+        if choice.mode == .auto, aperture.isAutomatic { return true }
         let format = device.activeFormat
-        switch choice.mode {
-        case .auto:
-            return true
-        case .shutterPriority:
-            guard let duration = choice.durationTargetSeconds,
-                  duration.isFinite, duration > 0,
-                  duration >= limits.minDurationSeconds,
-                  duration <= limits.maxDurationSeconds else { return false }
-            return format.supportsExposureModeCustom(
-                lensAperture: AVCaptureDevice.currentLensAperture,
-                duration: CMTime.fromValidatedSeconds(duration) ?? AVCaptureDevice.autoExposureDuration,
-                iso: AVCaptureDevice.autoISO)
-        case .isoPriority:
-            guard let iso = choice.isoTarget,
-                  iso.isFinite, iso > 0,
-                  iso >= limits.minISO, iso <= limits.maxISO else { return false }
-            return format.supportsExposureModeCustom(
-                lensAperture: AVCaptureDevice.currentLensAperture,
-                duration: AVCaptureDevice.autoExposureDuration,
-                iso: Float(iso))
-        case .manual:
-            guard let duration = choice.durationTargetSeconds,
-                  let iso = choice.isoTarget,
-                  duration.isFinite, duration > 0, iso.isFinite, iso > 0,
-                  duration >= limits.minDurationSeconds, duration <= limits.maxDurationSeconds,
-                  iso >= limits.minISO, iso <= limits.maxISO else { return false }
-            return format.supportsExposureModeCustom(
-                lensAperture: AVCaptureDevice.currentLensAperture,
-                duration: CMTime.fromValidatedSeconds(duration) ?? AVCaptureDevice.autoExposureDuration,
-                iso: Float(iso))
+        guard let lensAperture = apertureValue(aperture, device: device) else { return false }
+        let duration: CMTime
+        if let target = choice.durationTargetSeconds {
+            guard target >= limits.minDurationSeconds, target <= limits.maxDurationSeconds,
+                  let value = CMTime.fromValidatedSeconds(target) else { return false }
+            duration = value
+        } else { duration = AVCaptureDevice.autoExposureDuration }
+        let iso: Float
+        if let target = choice.isoTarget {
+            guard target > 0, target >= limits.minISO, target <= limits.maxISO,
+                  let value = representableFloat(target) else { return false }
+            iso = value
+        } else { iso = AVCaptureDevice.autoISO }
+        return format.supportsExposureModeCustom(lensAperture: lensAperture, duration: duration, iso: iso)
+    }
+
+    static func isFixedApertureCamera(_ device: AVCaptureDevice) -> Bool {
+        let format = device.activeFormat
+        let minimum = format.minLensAperture, maximum = format.maxLensAperture
+        return minimum.isFinite && maximum.isFinite && minimum > 0 && minimum == maximum
+    }
+
+    private static func apertureValue(_ choice: ApertureChoice, device: AVCaptureDevice) -> Float? {
+        guard let target = choice.numericTarget else { return AVCaptureDevice.autoLensAperture }
+        let format = device.activeFormat
+        let minimum = Double(format.minLensAperture), maximum = Double(format.maxLensAperture)
+        guard minimum.isFinite, maximum.isFinite, minimum > 0, maximum > minimum,
+              target >= minimum, target <= maximum, let value = representableFloat(target), value > 0 else {
+            return nil
         }
+        return value
     }
 
     /// Execute only while the native queue still owns the issuing sensor/control operation.

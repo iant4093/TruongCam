@@ -60,6 +60,9 @@ struct BaselineReadback: Hashable, Sendable {
     let focusPosition: Double?
     let whiteBalanceGains: WhiteBalanceGains?
     let provenance: ValueProvenance
+    var lensAperture: Double? = nil
+    var isFixedApertureCamera = false
+    var apertureAutomatic: Bool? = nil
 
     /// Identity of one measurement on the device.
     struct MeasurementIdentity: Hashable, Sendable {
@@ -78,7 +81,10 @@ struct BaselineReadback: Hashable, Sendable {
          iso: Double? = nil,
          focusPosition: Double? = nil,
          whiteBalanceGains: WhiteBalanceGains? = nil,
-         provenance: ValueProvenance = .settledDeviceReadback) {
+         provenance: ValueProvenance = .settledDeviceReadback,
+         lensAperture: Double? = nil,
+         isFixedApertureCamera: Bool = false,
+         apertureAutomatic: Bool? = nil) {
         self.monotonicSeconds = monotonicSeconds
         self.measurementIdentity = measurementIdentity
         self.isExposureAdjusting = isExposureAdjusting
@@ -89,11 +95,21 @@ struct BaselineReadback: Hashable, Sendable {
         self.focusPosition = focusPosition
         self.whiteBalanceGains = whiteBalanceGains
         self.provenance = provenance
+        self.lensAperture = lensAperture
+        self.isFixedApertureCamera = isFixedApertureCamera
+        self.apertureAutomatic = apertureAutomatic
     }
 
     var exposureProduct: Double? {
         guard let durationSeconds, let iso, durationSeconds > 0, iso > 0 else { return nil }
-        return durationSeconds * iso
+        let product = durationSeconds * iso
+        guard product.isFinite else { return nil }
+        if let lensAperture {
+            guard lensAperture.isFinite, lensAperture > 0 else { return nil }
+            let light = product / (lensAperture * lensAperture)
+            return light.isFinite && light > 0 ? light : nil
+        }
+        return product
     }
 }
 
@@ -112,6 +128,7 @@ struct BaselineSettlementRequirements: OptionSet, Hashable, Sendable {
     static let exposure = BaselineSettlementRequirements(rawValue: 1 << 0)
     static let focus = BaselineSettlementRequirements(rawValue: 1 << 1)
     static let whiteBalance = BaselineSettlementRequirements(rawValue: 1 << 2)
+    static let aperture = BaselineSettlementRequirements(rawValue: 1 << 3)
 
     static let exposureOnly: BaselineSettlementRequirements = [.exposure]
 }
@@ -124,6 +141,7 @@ struct BaselineStabilityReport: Hashable, Sendable {
     let focusPositionSpread: Double?
     let whiteBalanceGainRelativeSpread: Double?
     let unmetChecks: [String]
+    var apertureRelativeSpread: Double? = nil
 
     var isStable: Bool { unmetChecks.isEmpty }
 
@@ -154,6 +172,7 @@ struct BaselineSettlementRequest: Hashable, Sendable {
     /// The settled baseline already in force, when the plan was built from a
     /// manual selection instead of automatic parameters.
     let explicitBaseline: ExposureBaseline?
+    var fallbackAperture: ApertureChoice = .auto
 }
 
 /// Why baseline settlement stopped.
@@ -230,6 +249,8 @@ struct BaselineSettlementPolicy: Hashable, Sendable {
     var maxFocusPositionSpread: Double = 0.01
     /// Per-channel WB gain spread, relative to the window mean.
     var maxWhiteBalanceGainRelativeSpread: Double = 0.02
+    /// Aperture must itself remain stable even when ISO compensates its motion.
+    var maxApertureRelativeSpread: Double = 0.01
 
     static let initial = BaselineSettlementPolicy()
 }
@@ -417,6 +438,20 @@ actor BaselineSettler: SequenceBaselineSettling {
         }
 
         var focusSpread: Double?
+        var apertureSpread: Double?
+        if requirements.contains(.aperture) {
+            let apertures = window.compactMap(\.lensAperture)
+                .filter { $0.isFinite && $0 > 0 }
+            if apertures.count == max(window.count, 1) {
+                let spread = channelRelativeSpread(apertures)
+                apertureSpread = spread
+                if spread > policy.maxApertureRelativeSpread + 1e-12 {
+                    unmet.append(String(format: "lens aperture varies %.4f", spread))
+                }
+            } else {
+                unmet.append("aperture readback is incomplete")
+            }
+        }
         if requirements.contains(.focus) {
             let positions = window.compactMap(\.focusPosition)
             if let smallest = positions.min(), let largest = positions.max(),
@@ -454,7 +489,8 @@ actor BaselineSettler: SequenceBaselineSettling {
             exposureProductVariationEV: exposureVariation,
             focusPositionSpread: focusSpread,
             whiteBalanceGainRelativeSpread: whiteBalanceSpread,
-            unmetChecks: unmet)
+            unmetChecks: unmet,
+            apertureRelativeSpread: apertureSpread)
     }
 
     private static func channelRelativeSpread(_ values: [Double]) -> Double {
@@ -507,6 +543,11 @@ actor BaselineSettler: SequenceBaselineSettling {
         // an automatic choice stays automatic and is recorded per source rather
         // than being frozen to an unconvertible numeric temperature.
         let whiteBalance = request.fallbackWhiteBalance
+        let aperture: ApertureChoice
+        if request.intent == .freezeNumeric, requirements.contains(.aperture),
+           let observed = reference?.lensAperture, observed.isFinite, observed > 0 {
+            aperture = .manual(fNumber: observed)
+        } else { aperture = request.fallbackAperture }
 
         return SequenceBaselineSnapshot(
             exposure: exposure,
@@ -516,6 +557,7 @@ actor BaselineSettler: SequenceBaselineSettling {
             maxDimensions: request.maxDimensions,
             provenance: exposureProvenance,
             stableSampleCount: window.count,
-            longestPlannedDurationSeconds: request.longestPlannedDurationSeconds)
+            longestPlannedDurationSeconds: request.longestPlannedDurationSeconds,
+            aperture: aperture)
     }
 }

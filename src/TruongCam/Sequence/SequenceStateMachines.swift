@@ -243,6 +243,7 @@ struct SequenceSettingsSnapshot: Hashable, Sendable {
     let focus: FocusIntent
     let whiteBalance: WhiteBalanceIntent
     let maxDimensions: PixelDimensions
+    var aperture: ApertureChoice = .auto
 
     init(configurationGeneration: ConfigurationGeneration,
          revision: UInt64,
@@ -250,7 +251,8 @@ struct SequenceSettingsSnapshot: Hashable, Sendable {
          biasEV: Double,
          focus: FocusIntent,
          whiteBalance: WhiteBalanceIntent,
-         maxDimensions: PixelDimensions) {
+         maxDimensions: PixelDimensions,
+         aperture: ApertureChoice = .auto) {
         self.configurationGeneration = configurationGeneration
         self.revision = revision
         self.exposure = exposure
@@ -258,6 +260,7 @@ struct SequenceSettingsSnapshot: Hashable, Sendable {
         self.focus = focus
         self.whiteBalance = whiteBalance
         self.maxDimensions = maxDimensions
+        self.aperture = aperture
     }
 }
 
@@ -579,6 +582,6 @@ enum SequenceBaselineFocusPreparation {
         return SequenceSettingsSnapshot(configurationGeneration: prior.configurationGeneration,
             revision: prior.revision &+ 1, exposure: prior.exposure, biasEV: prior.biasEV,
             focus: FocusIntent(mode: .manual, position: observedPosition, pointOfInterest: nil),
-            whiteBalance: prior.whiteBalance, maxDimensions: prior.maxDimensions)
+            whiteBalance: prior.whiteBalance, maxDimensions: prior.maxDimensions, aperture: prior.aperture)
     }
 }

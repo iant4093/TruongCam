@@ -427,7 +427,7 @@ enum StartupRepairSuite {
                 case .focus: r.equal("first swipe locks measured focus", await model.focus.position, 0.42)
                 case .whiteBalance:
                     r.equal("Auto WB seed preserves both converted axes", await model.whiteBalance.temperatureAndTint, WhiteBalanceTemperatureAndTint(temperature: 4700, tint: 12))
-                case .exposureBias: break
+                case .exposureBias, .aperture: break
                 }
             }
             // Returning to Auto and immediately swiping must wait for that owned
@@ -2171,7 +2171,7 @@ private actor ResponsiveAutoCamera: CaptureCameraSurface {
     var lifecycle: CameraLifecycle { .running }
     var capabilitySnapshot: CameraCapabilitySnapshot { .empty(generation: .zero, reason: "synthetic moving 3A") }
     func applyControls(revision: UInt64, exposure: ExposureChoice, biasEV: Double,
-                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent) async -> Result<AppliedControlSnapshot, CaptureFailure> {
+                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         let live = responsiveReading(revision: revision, exposure: exposure, bias: biasEV,
             duration: exposure.durationTargetSeconds ?? 0.01, iso: exposure.isoTarget ?? 100,
             position: focus.position ?? 0.4, focusMode: focus.mode, wbMode: whiteBalance.mode)

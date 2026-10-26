@@ -88,6 +88,7 @@ final class FinalTupleOperation: @unchecked Sendable {
         var priorityCombinations: Set<ExposureModeKind>?
         var cleanAperture: PixelDimensions??
         var frameRates: [ClosedRange<Double>]?
+        var apertureCapability: ApertureCapability? = nil
     }
 
     /// A lock-guarded carrier so the port can report the full facts out of its async query.

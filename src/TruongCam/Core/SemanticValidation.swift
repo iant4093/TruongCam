@@ -1,5 +1,27 @@
 import Foundation
 
+extension ExposureRequestRecord {
+    /// Optional request-only fields introduced for variable-aperture cameras.
+    /// Source EXIF is validated independently and is never filled from a target.
+    func apertureValidationProblems(context: String) -> [String] {
+        var problems: [String] = []
+        if let aperture, !aperture.isFinite || aperture <= 0 {
+            problems.append("\(context) aperture must be positive and finite")
+        }
+        switch apertureMode {
+        case nil:
+            if aperture != nil { problems.append("\(context) aperture requires an apertureMode") }
+        case "auto":
+            if aperture != nil { problems.append("\(context) auto aperture must not carry a numeric target") }
+        case "manual":
+            if aperture == nil { problems.append("\(context) manual aperture requires a numeric target") }
+        default:
+            problems.append("\(context) apertureMode must be auto or manual when present")
+        }
+        return problems
+    }
+}
+
 // schemas/README.md: "use native Codable plus explicit runtime validation in the
 // iOS app". These validators enforce the semantic rules that JSON Schema cannot
 // express. They never mutate data and never attempt a migration.
@@ -68,6 +90,7 @@ struct SourceSidecarSemanticValidator: Sendable {
         if !sidecar.requested.exposure.biasEV.isFinite {
             problems.append("requested biasEV must be finite")
         }
+        problems.append(contentsOf: sidecar.requested.exposure.apertureValidationProblems(context: "requested exposure"))
         if let iso = sidecar.observed.iso, !iso.isFinite || iso <= 0 {
             problems.append("observed iso must be positive and finite when present")
         }
@@ -318,6 +341,7 @@ struct SequenceDocumentSemanticValidator: Sendable {
             if !baseline.exposure.biasEV.isFinite {
                 problems.append("baseline biasEV must be finite")
             }
+            problems.append(contentsOf: baseline.exposure.apertureValidationProblems(context: "baseline exposure"))
             switch baseline.exposure.mode {
             case .auto:
                 if baseline.exposure.iso != nil || baseline.exposure.durationSeconds != nil {

@@ -256,7 +256,8 @@ actor SequenceCoordinator {
                 biasEV: baseline.biasEV,
                 focus: baseline.focus,
                 whiteBalance: baseline.whiteBalance,
-                maxDimensions: baseline.maxDimensions)
+                maxDimensions: baseline.maxDimensions,
+                aperture: baseline.aperture)
             settingsTouched = true
             if case .failure(let failure) = await environment.settings.apply(frozen) {
                 let restoration = await restorePriorSettings()
@@ -537,7 +538,8 @@ actor SequenceCoordinator {
             whiteBalance: live?.whiteBalance ?? Self.defaultWhiteBalance,
             requestedOffsetEV: nil,
             focusBracketTarget: nil,
-            deadlineOrdinal: nil)
+            deadlineOrdinal: nil,
+            aperture: live?.aperture ?? .auto)
 
         let outcome = await environment.pipeline.run(intent)
         record(outcome, ordinal: 0)
@@ -586,7 +588,8 @@ actor SequenceCoordinator {
                 whiteBalance: baseline?.whiteBalance ?? Self.defaultWhiteBalance,
                 requestedOffsetEV: nil,
                 focusBracketTarget: nil,
-                deadlineOrdinal: DeadlineOrdinal(deadlineOrdinal))
+                deadlineOrdinal: DeadlineOrdinal(deadlineOrdinal),
+                aperture: baseline?.aperture ?? .auto)
 
             let outcome = await environment.pipeline.run(intent)
             let committedAt = environment.clock.now()
@@ -670,7 +673,9 @@ actor SequenceCoordinator {
                 whiteBalance: appliedBaseline?.whiteBalance ?? Self.defaultWhiteBalance,
                 requestedOffsetEV: offset,
                 focusBracketTarget: nil,
-                deadlineOrdinal: nil)
+                deadlineOrdinal: nil,
+                aperture: appliedBaseline?.aperture ?? .auto,
+                exposureBaseline: baseline)
         }
     }
 
@@ -793,7 +798,8 @@ actor SequenceCoordinator {
                 whiteBalance: baseline?.whiteBalance ?? Self.defaultWhiteBalance,
                 requestedOffsetEV: nil,
                 focusBracketTarget: position,
-                deadlineOrdinal: nil)
+                deadlineOrdinal: nil,
+                aperture: baseline?.aperture ?? .auto)
 
             let request = FocusFrameRequest(ordinal: SourceOrdinal(index),
                                             requestedPosition: position,
@@ -850,7 +856,9 @@ actor SequenceCoordinator {
                             whiteBalance: WhiteBalanceIntent,
                             requestedOffsetEV: Double?,
                             focusBracketTarget: Double?,
-                            deadlineOrdinal: DeadlineOrdinal?) -> CaptureIntent {
+                            deadlineOrdinal: DeadlineOrdinal?,
+                            aperture: ApertureChoice = .auto,
+                            exposureBaseline: ExposureBaseline? = nil) -> CaptureIntent {
         let now = environment.wallClock.now()
         // A timer run is one source with no sequence document, so it carries no
         // sequence membership.
@@ -878,7 +886,11 @@ actor SequenceCoordinator {
             equivalentFocalLengthMM: plan.nominalEquivalentFocalLengthMM,
             // Carried on the intent so the source sidecar is self-contained:
             // SourceSequenceLink.plannedCount comes from the plan itself.
-            sequencePlannedCount: plan.plannedSourceCount)
+            sequencePlannedCount: plan.plannedSourceCount,
+            baselineISO: exposureBaseline?.iso,
+            baselineDurationSeconds: exposureBaseline?.durationSeconds,
+            aperture: aperture,
+            baselineAperture: exposureBaseline?.aperture)
     }
 
     // MARK: - Baseline settlement
@@ -889,6 +901,7 @@ actor SequenceCoordinator {
                                  current: ExposureBaseline?) async -> Result<SequenceBaselineSnapshot?,
                                                                                      CaptureFailure> {
         let fallbackExposure = prior?.exposure ?? .auto
+        let fallbackAperture = prior?.aperture ?? .auto
         var fallbackFocus = prior?.focus ?? Self.defaultFocus
         let fallbackWhiteBalance = prior?.whiteBalance ?? Self.defaultWhiteBalance
         let dimensions = prior?.maxDimensions ?? PixelDimensions(width: 0, height: 0)
@@ -910,9 +923,16 @@ actor SequenceCoordinator {
                 maxDimensions: dimensions,
                 provenance: .requested,
                 stableSampleCount: 0,
-                longestPlannedDurationSeconds: 0))
+                longestPlannedDurationSeconds: 0,
+                aperture: fallbackAperture))
 
         case .exposureBracket, .focusBracket:
+            if let aperture = capability.apertureCapability, aperture.isVariable,
+               !aperture.manualExposureModes.contains(.manual) {
+                return .failure(CaptureFailure(kind: .invalidSettings(
+                    detail: "This camera cannot lock aperture, shutter and ISO together for a bracket."),
+                    operation: "sequence.prepareBaselineAperture"))
+            }
             if let prior, capability.focusLimits.supportsCustomLensPosition, prior.focus.mode != .manual {
                 #if DEBUG
                 let focusPreparationBegan = environment.clock.now()
@@ -940,6 +960,9 @@ actor SequenceCoordinator {
             if fallbackExposure.isDurationAutomatic || fallbackExposure.isISOAutomatic {
                 requirements.insert(.exposure)
             }
+            if capability.apertureCapability?.isVariable == true {
+                requirements.insert(.aperture)
+            }
             if includeFocus {
                 requirements.insert(.focus)
             }
@@ -950,7 +973,8 @@ actor SequenceCoordinator {
             let explicit: ExposureBaseline?
             if case .manual(let duration, let iso) = fallbackExposure {
                 explicit = ExposureBaseline(durationSeconds: duration, iso: iso,
-                                            biasEV: bias, provenance: .requested)
+                                            biasEV: bias, provenance: .requested,
+                                            aperture: fallbackAperture.numericTarget)
             } else {
                 explicit = nil
             }
@@ -965,7 +989,8 @@ actor SequenceCoordinator {
                 fallbackFocus: fallbackFocus,
                 fallbackWhiteBalance: fallbackWhiteBalance,
                 maxDimensions: dimensions,
-                explicitBaseline: explicit)
+                explicitBaseline: explicit,
+                fallbackAperture: fallbackAperture)
 
             setPhase(.settlingBaseline)
             switch await environment.baselineSettler.settle(request, cancellation: cancellation) {

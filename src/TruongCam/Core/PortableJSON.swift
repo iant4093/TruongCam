@@ -205,6 +205,38 @@ struct PortableJSONReader {
     }
 }
 
+extension ExposureRequestRecord {
+    private enum ApertureCodingKeys: String, CodingKey {
+        case mode, durationSeconds, iso, biasEV, apertureMode, aperture
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: ApertureCodingKeys.self)
+        mode = try container.decode(ExposureModeKind.self, forKey: .mode)
+        durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
+        iso = try container.decodeIfPresent(Double.self, forKey: .iso)
+        biasEV = try container.decode(Double.self, forKey: .biasEV)
+        apertureMode = try container.decodeIfPresent(String.self, forKey: .apertureMode)
+        aperture = try container.decodeIfPresent(Double.self, forKey: .aperture)
+        let problems = apertureValidationProblems(context: "exposure")
+        if !problems.isEmpty { throw PortableJSONError.semanticValidation(problems) }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        let problems = apertureValidationProblems(context: "exposure")
+        if !problems.isEmpty { throw PortableJSONError.semanticValidation(problems) }
+        var container = encoder.container(keyedBy: ApertureCodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
+        try container.encodeIfPresent(iso, forKey: .iso)
+        try container.encode(biasEV, forKey: .biasEV)
+        try container.encodeIfPresent(apertureMode, forKey: .apertureMode)
+        // Keep historical absence intact. A new Auto request explicitly has no
+        // numeric target; the observed image aperture remains a separate field.
+        if apertureMode != nil { try container.encode(aperture, forKey: .aperture) }
+    }
+}
+
 // MARK: - Explicit-null key paths for each v1 document
 
 extension SourceSidecar {

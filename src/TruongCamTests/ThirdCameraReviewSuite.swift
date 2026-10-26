@@ -41,7 +41,7 @@ private actor ThirdReviewCamera: CameraServicing, CaptureCameraSurface {
     func recordMeasuredRAWDimensions(_ dimensions: PixelDimensions, evidenceOrigin: String) async {}
 
     func applyControls(revision: UInt64, exposure: ExposureChoice, biasEV: Double,
-                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent) async -> Result<AppliedControlSnapshot, CaptureFailure> {
+                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         applications.append(Application(revision: revision, exposure: exposure))
         let invocation = applications.count
         let hold = nextApplicationHold
@@ -116,7 +116,7 @@ enum ThirdCameraReviewSuite {
     }
 
     static let suite = TCSuite(id: "ThirdCameraReview", title: "Interactive setter drain before owned capture and sequence controls", cases: [
-        TCCase(id: "TC45D", title: "Immediate shutter cancels a pending paired Auto debounce without superseding its owned application") { r in
+        TCCase(id: "TC45D", title: "Immediate shutter drains an explicit whole-program Auto change without superseding its owned application") { r in
             guard let h = await StorageHarness.make(name: "tc45-debounce") else { r.check("fixture", false); return }
             let camera = ThirdReviewCamera(), (model, _) = await makeModel(camera, h)
             await model.start()
@@ -125,18 +125,21 @@ enum ThirdCameraReviewSuite {
             await MainActor.run {
                 model.setExposureMode(.manual)
                 model.setDuration(0.02)
+                r.equal("unsupported independent Auto has an explicit whole-program label", model.stripAutomaticLabel(.shutter), "Auto both")
                 model.setStripAutomatic(.shutter)
+                r.equal("explicit whole-program Auto leaves no Manual trap", model.exposure, .auto)
+                model.setExposureMode(.auto)
             }
             let shot = Task { await model.captureNow() }
             r.check("owned single control application really enters", await waitUntil { await hold.didEnter })
             try? await Task.sleep(for: .milliseconds(120))
             r.equal("pending UI debounce cannot issue during owned application", await camera.applications.count, 2)
-            r.equal("paired Auto intention reaches the owned application", await camera.applications.last?.exposure, .auto)
+            r.equal("explicit whole-program Auto reaches the owned application", await camera.applications.last?.exposure, .auto)
             r.equal("held native setter submits no photo", await camera.submitted.count, 0)
             await hold.release()
             await shot.value
             r.equal("current matching reading permits one native submission", await camera.submitted.count, 1)
-            r.equal("frozen paired Auto intention preserved", await camera.submitted.last?.exposure, .auto)
+            r.equal("frozen explicit Auto intention preserved", await camera.submitted.last?.exposure, .auto)
             await model.handleCameraScreenCovered()
         },
         TCCase(id: "TC45I", title: "Single capture drains an issued setter even when a newer debounce already replaced its task") { r in

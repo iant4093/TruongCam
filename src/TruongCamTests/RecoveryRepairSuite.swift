@@ -201,11 +201,11 @@ private final class SharedCameraSurface: CameraServicing, CameraCapabilityProvid
 
     func applyControls(
         revision: UInt64, exposure: ExposureChoice, biasEV: Double,
-        focus: FocusIntent, whiteBalance: WhiteBalanceIntent
+        focus: FocusIntent, whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto
     ) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         await spy.applyControls(
             revision: revision, exposure: exposure, biasEV: biasEV,
-            focus: focus, whiteBalance: whiteBalance)
+            focus: focus, whiteBalance: whiteBalance, aperture: aperture)
     }
 
     func setFocusPoint(

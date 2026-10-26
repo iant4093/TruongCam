@@ -152,20 +152,22 @@ actor SyntheticCameraService: CameraServicing, CaptureFormatPreparing {
 
     func applyControls(
         revision: UInt64, exposure: ExposureChoice, biasEV: Double,
-        focus: FocusIntent, whiteBalance: WhiteBalanceIntent
+        focus: FocusIntent, whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto
     ) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         controlApplyCount += 1
         if let hold = heldControls { _ = await hold.wait() }
         if controlDelay > .zero { try? await Task.sleep(for: controlDelay) }
-        let snapshot = AppliedControlSnapshot(
+        var snapshot = AppliedControlSnapshot(
             generation: capabilitySnapshot.generation, requestRevision: revision, settlement: .settled,
             exposureChoice: exposure, biasEV: biasEV,
             observedDurationSeconds: nil, observedISO: nil, observedExposureTargetOffset: nil,
             focusMode: focus.mode, focusPosition: focus.position,
             whiteBalanceMode: whiteBalance.mode, whiteBalanceGains: nil,
-            lensAperture: 1.8, videoZoomFactor: 1.0,
+            lensAperture: aperture.numericTarget ?? 1.8, videoZoomFactor: 1.0,
             photoConnectionScale: 1.0, photoConnectionCrop: 1.0,
             capturedAtUTC: Date(timeIntervalSince1970: 0))
+        snapshot.apertureChoice = aperture
+        snapshot.isApertureAutomatic = aperture.isAutomatic
         lastSnapshot = snapshot
         return .success(snapshot)
     }

@@ -55,7 +55,8 @@ Full-screen iPhone 17 Simulator captures at 1206 × 2622, with system safe areas
 
 - Genuine Bayer DNG at the highest RAW dimensions exposed by the selected camera
 - RAW/JPEG switching, physical lens selection with full-frame equivalent focal lengths, and front camera support
-- Persistent shutter, ISO, focus and temperature/tint white-balance controls; exposure compensation and hardware shutter/Camera Control support on compatible iPhones
+- Persistent shutter, ISO, focus and temperature/tint white-balance controls, plus aperture on supported lenses; independent Auto/manual exposure where the camera supports it
+- Exposure compensation and hardware shutter/Camera Control support on compatible iPhones
 - RGB preview histogram, thirds grid, level, zebras, focus peaking and a color focus loupe
 - Timer, exposure and focus bracketing, interval shooting, and hold-to-shoot 1/2/5 fps targets; actual cadence depends on the camera and saving
 - Portrait and both landscape orientations, with visual and haptic shutter feedback

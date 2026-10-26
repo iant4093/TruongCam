@@ -277,7 +277,9 @@ final class CameraViewModel {
             if self.formatPreparationRevision == revision { self.formatPreparationTask = nil }
         }
     }
-    private(set) var capability: CameraCapabilitySnapshot = .empty(generation: .zero, reason: "Not prepared")
+    private(set) var capability: CameraCapabilitySnapshot = .empty(generation: .zero, reason: "Not prepared") {
+        didSet { reconcileApertureCapability() }
+    }
 
     /// Adopts a capability published by the camera service after a graph change.
     ///
@@ -327,6 +329,7 @@ final class CameraViewModel {
     // MARK: Desired controls (user intent)
 
     private(set) var exposure: ExposureChoice = .auto
+    private(set) var aperture: ApertureChoice = .auto
     private(set) var biasEV: Double = 0
     private(set) var focus: FocusIntent = FocusIntent(mode: .continuousAuto, position: nil, pointOfInterest: nil)
     private(set) var whiteBalance: WhiteBalanceIntent = WhiteBalanceIntent(mode: .auto, temperatureAndTint: nil)
@@ -1110,17 +1113,71 @@ final class CameraViewModel {
         return camera.formats.indices.contains(index) ? camera.formats[index] : nil
     }
 
-    var isBiasAvailable: Bool { exposure.mode != .manual }
+    var isBiasAvailable: Bool { exposure.mode != .manual || (aperture.isAutomatic && activeFormat?.apertureCapability?.isVariable == true) }
 
     var availableExposureModes: [ExposureModeKind] {
         ExposureModeKind.allCases.filter { supportsExposureMode($0) }
     }
 
     func supportsExposureMode(_ mode: ExposureModeKind) -> Bool {
-        if mode == .auto { return true }
-        guard let format = activeFormat else { return false }
-        return format.supportsCustomExposureMode.value == true
-            && format.supportedPriorityCombinations.contains(mode)
+        supportsAperture(aperture, exposureMode: mode)
+    }
+
+    private func supportsAperture(_ choice: ApertureChoice, exposureMode: ExposureModeKind) -> Bool {
+        if exposureMode == .auto && choice.isAutomatic { return true }
+        guard let format = activeFormat, format.supportsCustomExposureMode.value == true else { return false }
+        if let capability = format.apertureCapability {
+            return capability.supports(choice, exposureMode: exposureMode)
+        }
+        return choice.isAutomatic && format.supportedPriorityCombinations.contains(exposureMode)
+    }
+
+    var isApertureAvailable: Bool {
+        activeFormat?.supportsCustomExposureMode.value == true
+            && activeFormat?.apertureCapability?.isVariable == true
+            && activeFormat?.apertureCapability?.manualExposureModes.isEmpty == false
+    }
+    var canAdjustAperture: Bool {
+        isApertureAvailable && activeFormat?.apertureCapability?.manualExposureModes.contains(exposure.mode) == true
+    }
+    var isApertureManual: Bool { !aperture.isAutomatic }
+    var apertureStops: [Double] { activeFormat?.apertureCapability?.selectableStops ?? [] }
+    var selectedApertureValue: Double {
+        aperture.numericTarget ?? currentApertureReading ?? apertureStops.first ?? 1
+    }
+    private var currentApertureReading: Double? {
+        guard let reading = applied, reading.generation == capability.generation,
+              let value = reading.lensAperture, value.isFinite, value > 0 else { return nil }
+        return value
+    }
+    var apertureReadout: String {
+        guard let value = aperture.numericTarget ?? currentApertureReading else { return "—" }
+        return ApertureFormatting.fNumber(value)
+    }
+    func setAperture(_ value: Double) {
+        let choice = ApertureChoice.manual(fNumber: value)
+        guard supportsAperture(choice, exposureMode: exposure.mode) else {
+            lastNotice = "That aperture is unavailable with these settings."
+            return
+        }
+        aperture = choice
+        scheduleApply()
+    }
+    func setApertureManual(_ enabled: Bool) {
+        if enabled { setAperture(selectedApertureValue) }
+        else if supportsAperture(.auto, exposureMode: exposure.mode) {
+            aperture = .auto
+            scheduleApply()
+        }
+    }
+    private func reconcileApertureCapability() {
+        guard capability.selectedCameraKind != nil else { return }
+        if !isApertureAvailable {
+            aperture = .auto
+            if openPanel == .aperture { openPanel = nil }
+        } else if !supportsAperture(aperture, exposureMode: exposure.mode) {
+            aperture = .auto
+        }
     }
 
     private var manualDurationStart: Double {
@@ -1177,11 +1234,41 @@ final class CameraViewModel {
         selectExposure(.settingISOManual(clampISO(value), from: exposure))
     }
 
-    /// Dragging the strip is an explicit Manual gesture. Unsupported priority
-    /// modes use an explicitly labeled paired Manual/Auto action, never a fake
-    /// native priority setter.
-    var stripUsesPairedExposure: Bool {
-        !supportsExposureMode(.shutterPriority) || !supportsExposureMode(.isoPriority)
+    /// Auto preserves peer settings whenever that transition is supported.
+    /// When no manual parameter can independently return to Auto, an explicitly
+    /// labelled whole-program reset prevents trapping the user in Manual.
+    private func supportsIndependentAutomatic(_ panel: CameraPanel) -> Bool {
+        switch panel {
+        case .shutter: return supportsExposureMode(ExposureChoice.settingDurationAuto(from: exposure).mode)
+        case .iso: return supportsExposureMode(ExposureChoice.settingISOAuto(from: exposure).mode)
+        case .aperture: return supportsAperture(.auto, exposureMode: exposure.mode)
+        case .focus, .whiteBalance, .exposureBias: return true
+        }
+    }
+    private var needsExposureReset: Bool {
+        (isShutterManual || isISOManual || isApertureManual)
+            && !(isShutterManual && supportsIndependentAutomatic(.shutter))
+            && !(isISOManual && supportsIndependentAutomatic(.iso))
+            && !(isApertureAvailable && isApertureManual && supportsIndependentAutomatic(.aperture))
+    }
+    func canSetStripAutomatic(_ panel: CameraPanel) -> Bool {
+        supportsIndependentAutomatic(panel) || (needsExposureReset && [.shutter, .iso, .aperture].contains(panel))
+    }
+    func stripAutomaticLabel(_ panel: CameraPanel) -> String {
+        if panel == .exposureBias { return "Reset" }
+        if !supportsIndependentAutomatic(panel), needsExposureReset {
+            return aperture.isAutomatic ? "Auto both" : "Auto all"
+        }
+        return "Auto"
+    }
+    func stripManualHint(_ panel: CameraPanel) -> String {
+        let paired: Bool
+        switch panel {
+        case .shutter: paired = !supportsExposureMode(shutterSelection(true).mode)
+        case .iso: paired = !supportsExposureMode(isoSelection(true).mode)
+        default: paired = false
+        }
+        return paired ? "Sets both shutter and ISO manually." : "Sets \(panel.title.lowercased()) manually."
     }
     func adjustShutterFromStrip(_ seconds: Double) {
         let value = clampDuration(seconds)
@@ -1196,11 +1283,19 @@ final class CameraViewModel {
         else if supportsExposureMode(.manual) { selectExposure(.manual(durationSeconds: manualDurationStart, iso: value)) }
     }
     func setStripAutomatic(_ panel: CameraPanel) {
+        if [.shutter, .iso, .aperture].contains(panel),
+           !supportsIndependentAutomatic(panel), needsExposureReset {
+            exposure = .auto
+            aperture = .auto
+            scheduleApply()
+            return
+        }
         switch panel {
         case .shutter:
-            if stripUsesPairedExposure { setExposureMode(.auto) } else { setShutterManual(false) }
+            if canSetStripAutomatic(panel) { setShutterManual(false) }
         case .iso:
-            if stripUsesPairedExposure { setExposureMode(.auto) } else { setISOManual(false) }
+            if canSetStripAutomatic(panel) { setISOManual(false) }
+        case .aperture: setApertureManual(false)
         case .focus: setFocusManual(false)
         case .whiteBalance: setWhiteBalanceManual(false)
         case .exposureBias: setBias(0)
@@ -1400,7 +1495,7 @@ final class CameraViewModel {
             exposure: exposure,
             biasEV: biasEV,
             focus: focus,
-            whiteBalance: whiteBalance)
+            whiteBalance: whiteBalance, aperture: aperture)
         switch result {
         case .success(let snapshot):
             // R01: a stale completion must not overwrite a newer readback. Omitting the
@@ -1600,17 +1695,17 @@ final class CameraViewModel {
             limits: limits,
             supportsCustomExposureMode: supportsCustom,
             supportsCombination: { choice in
-                guard let format = activeFormat else { return false }
+                guard activeFormat != nil else { return false }
                 switch choice.mode {
                 case .auto: return true
                 case .shutterPriority, .isoPriority, .manual:
-                    return format.supportedPriorityCombinations.contains(choice.mode)
+                    return supportsAperture(aperture, exposureMode: choice.mode)
                 }
             })
-        if !failures.isEmpty { return false }
+        if !failures.isEmpty || !supportsAperture(aperture, exposureMode: exposure.mode) { return false }
         if let failure = ExposureValidator.validateBias(biasEV, limits: limits) {
             _ = failure
-            return exposure.mode == .manual
+            return !isBiasAvailable
         }
         return true
     }
@@ -1710,7 +1805,7 @@ final class CameraViewModel {
             timezoneOffsetSeconds: TimeZone.current.secondsFromGMT(),
             mode: .single,
             equivalentFocalLengthMM: capability.camera(kind)?.validNominalEquivalentFocalLengthMM,
-            fileFormat: fileFormat)
+            fileFormat: fileFormat, aperture: aperture)
 
         #if DEBUG
         if let run = continuousRunID {
@@ -2825,7 +2920,7 @@ extension CameraViewModel: CameraSequenceSettingsSurface {
             biasEV: biasEV,
             focus: focus,
             whiteBalance: whiteBalance,
-            maxDimensions: dimensions)
+            maxDimensions: dimensions, aperture: aperture)
     }
 
     /// The last settled exposure baseline. Reported only when the device has
@@ -2847,12 +2942,13 @@ extension CameraViewModel: CameraSequenceSettingsSurface {
             iso: iso,
             biasEV: snapshot.biasEV,
             // Only a converged reading may claim this provenance.
-            provenance: BaselineReadback.provenance(for: snapshot.settlement))
+            provenance: BaselineReadback.provenance(for: snapshot.settlement), aperture: snapshot.lensAperture)
     }
 
     func applySequenceSettings(_ settings: SequenceSettingsSnapshot) async -> Result<Void, CaptureFailure> {
         let expectedGeneration = await capabilitySnapshotForSequences().generation
         exposure = settings.exposure
+        aperture = settings.aperture
         biasEV = settings.biasEV
         focus = settings.focus
         whiteBalance = settings.whiteBalance
@@ -2860,7 +2956,7 @@ extension CameraViewModel: CameraSequenceSettingsSurface {
         let revision = controlRevision
         let result = await camera.applyControls(
             revision: revision, exposure: settings.exposure, biasEV: settings.biasEV,
-            focus: settings.focus, whiteBalance: settings.whiteBalance)
+            focus: settings.focus, whiteBalance: settings.whiteBalance, aperture: settings.aperture)
         switch result {
         case .success(let acknowledgement):
             let deadline = clock.now() + max(5, 2 * (settings.exposure.durationTargetSeconds ?? 0) + 1)
@@ -2908,7 +3004,7 @@ extension CameraViewModel: CameraSequenceSettingsSurface {
             biasEV: 0,
             focus: FocusIntent(mode: .continuousAuto, position: nil, pointOfInterest: nil),
             whiteBalance: WhiteBalanceIntent(mode: .auto, temperatureAndTint: nil),
-            maxDimensions: dimensions)
+            maxDimensions: dimensions, aperture: .auto)
         return await applySequenceSettings(auto)
     }
 
@@ -2930,7 +3026,7 @@ extension CameraViewModel: FocusPositionControlling {
             exposure: exposure,
             biasEV: biasEV,
             focus: focus,
-            whiteBalance: whiteBalance)
+            whiteBalance: whiteBalance, aperture: aperture)
         switch result {
         case .success:
             return .success(())
@@ -3116,11 +3212,22 @@ extension CameraViewModel {
                      _ values: [Double], selected: Double?, observed: Double? = nil, automatic: Bool = true) -> HardwareControlSelection? {
             let values = values.filter { $0.isFinite }
             guard !values.isEmpty else { return nil }
-            let options = (automatic ? [HardwareControlOption(title: (kind == .shutter || kind == .iso) && stripUsesPairedExposure ? "Auto both" : "Auto", value: .automatic)] : []) + values.map { value in
+            // Picker identity must survive Auto-to-Manual seeding. Base the
+            // reset label on format support, not the currently selected values.
+            let resetTitle = supportsAperture(aperture, exposureMode: .auto) ? "Auto both" : "Auto all"
+            let automaticTitle: String
+            switch kind {
+            case .shutter: automaticTitle = supportsExposureMode(.isoPriority) ? "Auto" : resetTitle
+            case .iso: automaticTitle = supportsExposureMode(.shutterPriority) ? "Auto" : resetTitle
+            case .aperture: automaticTitle = supportsIndependentAutomatic(.aperture) ? "Auto" : "Auto all"
+            default: automaticTitle = "Auto"
+            }
+            let options = (automatic ? [HardwareControlOption(title: automaticTitle, value: .automatic)] : []) + values.map { value in
                 let label: String
                 switch kind {
                 case .shutter: label = ExposureFormatting.duration(value)
                 case .iso: label = "ISO \(Int(value.rounded()))"
+                case .aperture: label = ApertureFormatting.fNumber(value)
                 case .focus: label = String(format: "Position %.2f", value)
                 case .temperature: label = "\(Int(value)) K"
                 case .tint: label = String(format: "Tint %+.0f", value)
@@ -3153,12 +3260,16 @@ extension CameraViewModel {
             if exposureLimits.isValid, supportsExposureMode(.manual) || supportsExposureMode(.shutterPriority),
                let picker = numbers(.shutter, "Shutter", "timer", PhotographicExposureSteps.legal(PhotographicExposureSteps.durations,
                 minimum: exposureLimits.minDurationSeconds, maximum: exposureLimits.maxDurationSeconds), selected: exposure.durationTargetSeconds,
-                observed: observation?.observedDurationSeconds) { selections = [picker] }
+                observed: observation?.observedDurationSeconds, automatic: canSetStripAutomatic(.shutter)) { selections = [picker] }
         case .iso:
             if exposureLimits.isValid, supportsExposureMode(.manual) || supportsExposureMode(.isoPriority),
                let picker = numbers(.iso, "ISO", "camera.aperture", PhotographicExposureSteps.legal(PhotographicExposureSteps.iso,
                 minimum: exposureLimits.minISO, maximum: exposureLimits.maxISO), selected: exposure.isoTarget,
-                observed: observation?.observedISO) { selections = [picker] }
+                observed: observation?.observedISO, automatic: canSetStripAutomatic(.iso)) { selections = [picker] }
+        case .aperture:
+            if canAdjustAperture, let picker = numbers(.aperture, "Aperture", "camera.aperture", apertureStops,
+                selected: aperture.numericTarget, observed: observation?.lensAperture,
+                automatic: canSetStripAutomatic(.aperture)) { selections = [picker] }
         case .focus:
             if isManualFocusAvailable, let picker = numbers(.focus, "Focus", "viewfinder", (0...50).map { Double($0) / 50 },
                 selected: focus.mode == .manual ? focus.position : nil, observed: observation?.focusPosition) { selections = [picker] }
@@ -3171,7 +3282,7 @@ extension CameraViewModel {
                     observed: observation?.observedWhiteBalanceTemperatureAndTint?.tint)].compactMap { $0 }
             }
         case .exposureBias:
-            if exposureLimits.isValid, exposure.mode != .manual,
+            if exposureLimits.isValid, isBiasAvailable,
                let picker = numbers(.exposureBias, "Exposure", "plusminus", stride(from: ceil(exposureLimits.minBiasEV * 3), through: floor(exposureLimits.maxBiasEV * 3), by: 1).map { $0 / 3 }, selected: biasEV, automatic: false) { selections = [picker] }
         }
         let eligible = openPanel == nil ? hardwareLensSafetyEligible && (canSwitchCamera || ownsHardwareLensTransition)
@@ -3239,6 +3350,7 @@ extension CameraViewModel {
             switch selection.domain.kind {
             case .shutter: adjustShutterFromStrip(value)
             case .iso: adjustISOFromStrip(value)
+            case .aperture: setAperture(value)
             case .focus: setManualFocusPosition(value)
             case .temperature: setWhiteBalanceTemperature(value)
             case .tint: setWhiteBalanceTint(value)
@@ -3331,6 +3443,11 @@ extension CameraViewModel {
                   let iso = legal(reading.observedISO, exposureLimits.minISO, exposureLimits.maxISO) else { return }
             applyReadback(reading)
             if domain.kind == .shutter { adjustShutterFromStrip(duration) } else { adjustISOFromStrip(iso) }
+        case .aperture:
+            guard let capability = activeFormat?.apertureCapability,
+                  let value = legal(reading.lensAperture, capability.minFNumber, capability.maxFNumber) else { return }
+            applyReadback(reading)
+            setAperture(value)
         case .focus:
             guard let position = legal(reading.focusPosition, 0, 1) else { return }
             setManualFocusPosition(position)

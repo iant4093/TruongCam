@@ -204,6 +204,95 @@ enum MetadataSchemaSuite {
                         validator.validate(badPlan).contains { $0.contains("sourcePlan") })
             },
 
+            TCCase(id: "T19c", title: "Legacy aperture request absence stays unknown across portable reads") { r in
+                let sidecar = MetadataFixtures.minimalSourceSidecar()
+                do {
+                    let data = try PortableJSONWriter().encode(sidecar, explicitNullKeys: SourceSidecar.explicitNullKeyPaths)
+                    let object = try PortableJSONWriter.jsonObject(from: data) as? [String: Any]
+                    let requested = object?["requested"] as? [String: Any]
+                    let exposure = requested?["exposure"] as? [String: Any]
+                    r.check("historical mode remains absent", exposure?["apertureMode"] == nil)
+                    r.check("historical target remains absent", exposure?["aperture"] == nil)
+                    let decoded = try PortableJSONReader().decode(SourceSidecar.self, from: data,
+                        limitBytes: MetadataBounds.maxSourceSidecarUTF8Bytes)
+                    r.equal("missing mode is unknown", decoded.requested.exposure.apertureMode, nil)
+                    r.equal("missing target is unknown", decoded.requested.exposure.aperture, nil)
+                    r.check("legacy source remains semantically valid", SourceSidecarSemanticValidator().validate(decoded).isEmpty)
+                } catch { r.check("legacy aperture round trip", false, String(describing: error)) }
+            },
+
+            TCCase(id: "T19d", title: "Auto and manual aperture requests round-trip without replacing source EXIF") { r in
+                do {
+                    for target in [Double?.none, .some(2.8)] {
+                        var sidecar = MetadataFixtures.minimalSourceSidecar()
+                        sidecar.requested.exposure.apertureMode = target == nil ? "auto" : "manual"
+                        sidecar.requested.exposure.aperture = target
+                        sidecar.observed.aperture = 1.8
+                        let data = try PortableJSONWriter().encode(sidecar, explicitNullKeys: SourceSidecar.explicitNullKeyPaths)
+                        let decoded = try PortableJSONReader().decode(SourceSidecar.self, from: data,
+                            limitBytes: MetadataBounds.maxSourceSidecarUTF8Bytes)
+                        r.equal("request mode preserved", decoded.requested.exposure.apertureMode, target == nil ? "auto" : "manual")
+                        r.equal("request target preserved", decoded.requested.exposure.aperture, target)
+                        r.equal("actual source aperture remains separate", decoded.observed.aperture, 1.8)
+                        r.check("source metadata remains valid", SourceSidecarSemanticValidator().validate(decoded).isEmpty)
+                        if target == nil {
+                            let object = try PortableJSONWriter.jsonObject(from: data) as? [String: Any]
+                            let request = object?["requested"] as? [String: Any]
+                            let exposure = request?["exposure"] as? [String: Any]
+                            r.check("new Auto explicitly has no numeric target", exposure?["aperture"] is NSNull)
+                        }
+                        var sequence = MetadataFixtures.completeBracketSequence()
+                        sequence.baseline?.exposure.apertureMode = sidecar.requested.exposure.apertureMode
+                        sequence.baseline?.exposure.aperture = target
+                        let sequenceData = try PortableJSONWriter().encode(sequence, explicitNullKeys: SequenceDocument.explicitNullKeyPaths)
+                        let sequenceCopy = try PortableJSONReader().decode(SequenceDocument.self, from: sequenceData,
+                            limitBytes: MetadataBounds.maxSequenceJSONUTF8Bytes)
+                        r.equal("sequence baseline retains aperture request", sequenceCopy.baseline?.exposure.aperture, target)
+                        r.check("sequence baseline remains valid", SequenceDocumentSemanticValidator().validate(sequenceCopy).isEmpty)
+                    }
+                    var unknownSource = MetadataFixtures.minimalSourceSidecar()
+                    unknownSource.requested.exposure.apertureMode = "manual"
+                    unknownSource.requested.exposure.aperture = 2.8
+                    let data = try PortableJSONWriter().encode(unknownSource, explicitNullKeys: SourceSidecar.explicitNullKeyPaths)
+                    let decoded = try PortableJSONReader().decode(SourceSidecar.self, from: data,
+                        limitBytes: MetadataBounds.maxSourceSidecarUTF8Bytes)
+                    r.equal("missing EXIF never becomes the requested aperture", decoded.observed.aperture, nil)
+                } catch { r.check("aperture metadata round trip", false, String(describing: error)) }
+            },
+
+            TCCase(id: "T19e", title: "Malformed aperture request modes and values fail portable and semantic gates") { r in
+                let invalid: [(String?, Double?)] = [
+                    (nil, 2.8), ("manual", nil), ("auto", 2.8), ("unsupported", nil),
+                    ("manual", 0), ("manual", -1), ("manual", .nan), ("manual", .infinity),
+                ]
+                for (mode, target) in invalid {
+                    var source = MetadataFixtures.minimalSourceSidecar()
+                    source.requested.exposure.apertureMode = mode
+                    source.requested.exposure.aperture = target
+                    r.check("source semantic aperture gate", !SourceSidecarSemanticValidator().validate(source).isEmpty)
+                    var sequence = MetadataFixtures.completeBracketSequence()
+                    sequence.baseline?.exposure.apertureMode = mode
+                    sequence.baseline?.exposure.aperture = target
+                    r.check("sequence semantic aperture gate", !SequenceDocumentSemanticValidator().validate(sequence).isEmpty)
+                    var refused = false
+                    do { _ = try PortableJSONWriter().encode(source, explicitNullKeys: SourceSidecar.explicitNullKeyPaths) }
+                    catch { refused = true }
+                    r.check("portable writer rejects inconsistent aperture request", refused)
+                }
+                for invalidFields in [
+                    "\"aperture\": 2.8", "\"apertureMode\": \"manual\"",
+                    "\"apertureMode\": \"auto\", \"aperture\": 2.8",
+                    "\"apertureMode\": \"unsupported\"",
+                    "\"apertureMode\": \"manual\", \"aperture\": 0",
+                ] {
+                    let text = "{\"mode\":\"auto\",\"biasEV\":0,\(invalidFields)}"
+                    var refused = false
+                    do { _ = try PortableJSONReader().decode(ExposureRequestRecord.self, from: Data(text.utf8), limitBytes: 1024) }
+                    catch { refused = true }
+                    r.check("portable reader rejects invalid aperture shape", refused)
+                }
+            },
+
             TCCase(id: "T39", title: "Unknown optional values are omitted, never zero-filled") { r in
                 let sidecar = MetadataFixtures.minimalSourceSidecar()
                 r.equal("focus position unknown", sidecar.observed.focus?.position, nil)

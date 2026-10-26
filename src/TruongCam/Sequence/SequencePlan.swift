@@ -144,15 +144,18 @@ struct ExposureBaseline: Hashable, Sendable {
     let iso: Double
     let biasEV: Double
     let provenance: ValueProvenance
+    var aperture: Double? = nil
 
     init(durationSeconds: Double,
          iso: Double,
          biasEV: Double = 0,
-         provenance: ValueProvenance = .settledDeviceReadback) {
+         provenance: ValueProvenance = .settledDeviceReadback,
+         aperture: Double? = nil) {
         self.durationSeconds = durationSeconds
         self.iso = iso
         self.biasEV = biasEV
         self.provenance = provenance
+        self.aperture = aperture
     }
 }
 
@@ -239,6 +242,10 @@ struct ExposureBracketPlan: Hashable, Sendable {
         }
 
         if path == .native {
+            if context.capability.apertureCapability?.isVariable == true {
+                errors.append(.nativeBracketPathUnverified(requested: count,
+                    reason: "Native bracket aperture retention has not been measured for this variable lens."))
+            }
             switch context.admission.testedNativeBracketCounts {
             case .unknown(let reason), .unavailable(let reason):
                 errors.append(.nativeBracketPathUnverified(requested: count, reason: reason))
@@ -270,7 +277,10 @@ struct ExposureBracketPlan: Hashable, Sendable {
             limits: limits,
             supportsCustomExposureMode: context.capability.supportsCustomExposureMode,
             supportsCombination: { choice in
-                context.capability.supportedExposureModes.contains(choice.mode)
+                if let aperture = context.capability.apertureCapability, aperture.isVariable {
+                    return aperture.manualExposureModes.contains(choice.mode)
+                }
+                return context.capability.supportedExposureModes.contains(choice.mode)
             })
         if !baselineFailures.isEmpty {
             errors.append(.baselineExposureInvalid(failures: baselineFailures))
@@ -433,6 +443,7 @@ struct SequenceCapabilityContext: Hashable, Sendable {
     let focusLimits: FocusLimits
     let supportsCustomExposureMode: Bool
     let supportedExposureModes: Set<ExposureModeKind>
+    var apertureCapability: ApertureCapability? = nil
 
     /// No discovered limits: range checks are skipped exactly as
     /// `ExposureValidator` does for invalid limits, and manual focus is refused
@@ -669,6 +680,7 @@ struct SequenceBaselineSnapshot: Hashable, Sendable {
     let provenance: ValueProvenance
     let stableSampleCount: Int
     let longestPlannedDurationSeconds: Double
+    var aperture: ApertureChoice = .auto
 
     var durationSeconds: Double? { exposure.durationTargetSeconds }
     var isoTarget: Double? { exposure.isoTarget }
@@ -680,7 +692,8 @@ struct SequenceBaselineSnapshot: Hashable, Sendable {
         return ExposureBaseline(durationSeconds: duration,
                                 iso: iso,
                                 biasEV: biasEV,
-                                provenance: provenance)
+                                provenance: provenance,
+                                aperture: aperture.numericTarget)
     }
 }
 
@@ -733,7 +746,9 @@ enum SequenceDocumentBuilder {
                 mode: snapshot.exposure.mode,
                 durationSeconds: snapshot.exposure.durationTargetSeconds,
                 iso: snapshot.exposure.isoTarget,
-                biasEV: snapshot.biasEV),
+                biasEV: snapshot.biasEV,
+                apertureMode: snapshot.aperture.isAutomatic ? "auto" : "manual",
+                aperture: snapshot.aperture.numericTarget),
             focus: FocusRequestRecord(
                 mode: snapshot.focus.mode,
                 position: snapshot.focus.position),

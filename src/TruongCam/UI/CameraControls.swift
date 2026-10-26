@@ -697,7 +697,7 @@ struct CameraTopRow: View {
                                 .padding(.horizontal, 10)
                                 .frame(minWidth: 44, minHeight: 44).background(.black.opacity(0.55), in: Capsule())
                         }
-                        .disabled(camera.exposure.mode == .manual || !camera.exposureLimits.isValid)
+                        .disabled(!camera.isBiasAvailable || !camera.exposureLimits.isValid)
                         .accessibilityIdentifier("exposureCompensation")
                         .accessibilityLabel("Exposure compensation")
                         .accessibilityHint("Adjusts automatic exposure. In full manual, change shutter or ISO.")
@@ -770,19 +770,22 @@ struct CameraTopRow: View {
     }
 }
 
-/// The compact Shutter/ISO/Focus/WB readout row.
+/// The compact readout row. Variable-aperture lenses add one control without
+/// changing the reserved row height or moving the shutter.
 struct CameraReadoutRow: View {
     @Environment(AppEnvironment.self) private var app
 
     var body: some View {
-        HStack(spacing: 12) {
-            ForEach(CameraPanel.allCases.filter { $0 != .exposureBias }) { panel in
-                if let camera = app.camera {
-                    ReadoutButton(camera: camera, panel: panel)
+        if let camera = app.camera {
+            HStack(spacing: camera.isApertureAvailable ? 8 : 12) {
+                ForEach(CameraPanel.allCases.filter {
+                    $0 != .exposureBias && ($0 != .aperture || camera.isApertureAvailable)
+                }) { panel in
+                    ReadoutButton(camera: camera, panel: panel, compactLabels: camera.isApertureAvailable)
                 }
             }
+            .padding(.horizontal, 16)
         }
-        .padding(.horizontal, 16)
     }
 }
 
@@ -792,10 +795,13 @@ struct CameraReadoutGrid: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 16) {
+            HStack(spacing: app.camera?.isApertureAvailable == true ? 8 : 16) {
                 if let camera = app.camera {
-                    ReadoutButton(camera: camera, panel: .shutter)
-                    ReadoutButton(camera: camera, panel: .iso)
+                    ReadoutButton(camera: camera, panel: .shutter, compactLabels: camera.isApertureAvailable)
+                    ReadoutButton(camera: camera, panel: .iso, compactLabels: camera.isApertureAvailable)
+                    if camera.isApertureAvailable {
+                        ReadoutButton(camera: camera, panel: .aperture, compactLabels: true)
+                    }
                 }
             }
             HStack(spacing: 16) {
@@ -814,6 +820,7 @@ private struct ReadoutButton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let camera: CameraViewModel
     let panel: CameraPanel
+    var compactLabels = false
 
     var body: some View {
         Button {
@@ -823,15 +830,17 @@ private struct ReadoutButton: View {
         } label: {
             VStack(spacing: 5) {
                 Text(shortLabel)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: compactLabels ? 10 : 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 Text(valueLabel)
                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                     .foregroundStyle(camera.openPanel == panel ? .yellow : .white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
-            .frame(minWidth: 56, maxWidth: .infinity, minHeight: 44)
+            .frame(minWidth: compactLabels ? 44 : 56, maxWidth: .infinity, minHeight: 44)
             .background(camera.openPanel == panel ? .white.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(CameraPressStyle())
@@ -850,8 +859,11 @@ private struct ReadoutButton: View {
 
     private var shortLabel: String {
         switch panel {
-        case .shutter: return camera.isShutterManual ? "Shutter · M" : "Shutter · Auto"
-        case .iso: return camera.isISOManual ? "ISO · M" : "ISO · Auto"
+        case .shutter: return camera.isShutterManual ? "Shutter · M" : compactLabels ? "Shutter · A" : "Shutter · Auto"
+        case .iso: return camera.isISOManual ? "ISO · M" : compactLabels ? "ISO · A" : "ISO · Auto"
+        case .aperture:
+            return compactLabels ? (camera.isApertureManual ? "ƒ · M" : "ƒ · A")
+                : (camera.isApertureManual ? "Aperture · M" : "Aperture · Auto")
         case .focus: return "Focus"
         case .whiteBalance: return "WB"
         case .exposureBias: return "EV"
@@ -862,6 +874,7 @@ private struct ReadoutButton: View {
         switch panel {
         case .shutter: return camera.shutterReadout.replacingOccurrences(of: "Auto · ", with: "")
         case .iso: return camera.isoReadout.replacingOccurrences(of: "Auto · ", with: "")
+        case .aperture: return camera.apertureReadout
         case .focus: return camera.focusReadout
         case .whiteBalance: return camera.whiteBalanceReadout
         case .exposureBias: return ExposureFormatting.bias(camera.biasEV)
@@ -878,6 +891,10 @@ private struct ReadoutButton: View {
             return camera.isISOManual
                 ? "Manual, ISO \(camera.isoReadout)"
                 : "Automatic, currently ISO \(camera.isoReadout)"
+        case .aperture:
+            return camera.isApertureManual
+                ? "Manual, \(camera.apertureReadout)"
+                : "Automatic, currently \(camera.apertureReadout)"
         case .focus:
             switch camera.focus.mode {
             case .manual: return "Manual, position \(camera.focusReadout)"

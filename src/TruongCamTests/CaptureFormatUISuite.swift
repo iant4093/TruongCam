@@ -28,7 +28,7 @@ private actor Format51CaptureCamera: CaptureCameraSurface {
         self.native = native; self.capabilitySnapshot = capability
     }
     func applyControls(revision: UInt64, exposure: ExposureChoice, biasEV: Double,
-                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent) -> Result<AppliedControlSnapshot, CaptureFailure> {
+                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto) -> Result<AppliedControlSnapshot, CaptureFailure> {
         let value = AppliedControlSnapshot(generation: capabilitySnapshot.generation, requestRevision: revision,
             settlement: .settled, exposureChoice: exposure, biasEV: biasEV,
             observedDurationSeconds: 0.01, observedISO: 100, observedExposureTargetOffset: 0,

@@ -13,10 +13,11 @@ struct CameraAdjustmentWell: View {
             if let panel = camera.openPanel {
                 HStack(spacing: 10) {
                     Button { camera.setStripAutomatic(panel) } label: {
-                        Text(autoLabel(panel)).font(.caption2).frame(width: 44, height: 44)
+                        Text(camera.stripAutomaticLabel(panel)).font(.caption2).frame(width: 44, height: 44)
                     }
                     .foregroundStyle(isAutomatic(panel) ? Color.yellow : Color.white)
                     .accessibilityLabel(autoAccessibility(panel))
+                    .disabled(!camera.canSetStripAutomatic(panel))
                     Group {
                         if let viewport = controlsViewportHeight, viewport < controlsContentHeight {
                             ScrollView(.vertical) {
@@ -44,17 +45,19 @@ struct CameraAdjustmentWell: View {
             .disabled(camera.isCaptureBusy)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: camera.openPanel)
     }
-    private func autoLabel(_ panel: CameraPanel) -> String {
-        if panel == .exposureBias { return "Reset" }
-        return (panel == .shutter || panel == .iso) && camera.stripUsesPairedExposure ? "Auto both" : "Auto"
-    }
     private func autoAccessibility(_ panel: CameraPanel) -> String {
-        autoLabel(panel) == "Auto both" ? "Set shutter and ISO to automatic" : "Set \(panel.title) to automatic"
+        if panel == .exposureBias { return "Reset exposure compensation" }
+        switch camera.stripAutomaticLabel(panel) {
+        case "Auto both": return "Set shutter and ISO to automatic"
+        case "Auto all": return "Set aperture, shutter and ISO to automatic"
+        default: return "Set \(panel.title) to automatic"
+        }
     }
     private func isAutomatic(_ panel: CameraPanel) -> Bool {
         switch panel {
         case .shutter: return !camera.isShutterManual
         case .iso: return !camera.isISOManual
+        case .aperture: return !camera.isApertureManual
         case .focus: return camera.focus.mode != .manual
         case .whiteBalance: return camera.whiteBalance.mode == .auto
         case .exposureBias: return camera.biasEV == 0
@@ -63,7 +66,7 @@ struct CameraAdjustmentWell: View {
     @ViewBuilder private func controls(_ panel: CameraPanel) -> some View {
         switch panel {
         case .exposureBias:
-            if camera.exposureLimits.isValid, camera.exposure.mode != .manual {
+            if camera.exposureLimits.isValid, camera.isBiasAvailable {
                 let limits = camera.exposureLimits
                 let steps = stride(from: ceil(limits.minBiasEV * 3), through: floor(limits.maxBiasEV * 3), by: 1).map { $0 / 3 }
                 DetentRuler(values: steps, value: camera.biasEV, label: "Exposure compensation",
@@ -76,7 +79,7 @@ struct CameraAdjustmentWell: View {
                     minimum: limits.minDurationSeconds, maximum: limits.maxDurationSeconds)
                 DetentRuler(values: steps, value: camera.exposure.durationTargetSeconds ?? camera.observedDurationSeconds ?? limits.minDurationSeconds,
                     label: "Shutter duration", displayValue: camera.shutterReadout, onSelect: camera.adjustShutterFromStrip)
-                    .accessibilityHint(camera.stripUsesPairedExposure ? "Sets both shutter and ISO manually." : "Sets shutter manually.")
+                    .accessibilityHint(camera.stripManualHint(panel))
             } else { unavailable("Manual exposure unavailable") }
         case .iso:
             if camera.exposureLimits.isValid, camera.supportsExposureMode(.manual) || camera.supportsExposureMode(.isoPriority) {
@@ -85,8 +88,15 @@ struct CameraAdjustmentWell: View {
                     minimum: limits.minISO, maximum: limits.maxISO)
                 DetentRuler(values: steps, value: camera.exposure.isoTarget ?? camera.observedISO ?? limits.minISO,
                     label: "ISO", displayValue: camera.isoReadout, onSelect: camera.adjustISOFromStrip)
-                    .accessibilityHint(camera.stripUsesPairedExposure ? "Sets both shutter and ISO manually." : "Sets ISO manually.")
+                    .accessibilityHint(camera.stripManualHint(panel))
             } else { unavailable("Manual exposure unavailable") }
+        case .aperture:
+            if camera.canAdjustAperture, !camera.apertureStops.isEmpty {
+                DetentRuler(values: camera.apertureStops, value: camera.selectedApertureValue,
+                    label: "Lens aperture", displayValue: camera.apertureReadout,
+                    onSelect: camera.setAperture)
+                    .accessibilityHint(camera.stripManualHint(panel))
+            } else { unavailable("Aperture unavailable with these exposure settings") }
         case .focus:
             if camera.isManualFocusAvailable {
                 DetentRuler(values: (0...50).map { Double($0) / 50 },

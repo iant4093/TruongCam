@@ -171,8 +171,12 @@ struct CaptureIntent: Hashable, Sendable {
          sequencePlannedCount: Int? = nil,
          baselineISO: Double? = nil,
          baselineDurationSeconds: Double? = nil,
-         fileFormat: CaptureFileFormat = .bayerDNG) {
+         fileFormat: CaptureFileFormat = .bayerDNG,
+         aperture: ApertureChoice = .auto,
+         baselineAperture: Double? = nil) {
         self.fileFormat = fileFormat
+        self.aperture = aperture
+        self.baselineAperture = baselineAperture
         self.captureID = captureID
         self.libraryID = libraryID
         self.sequenceID = sequenceID
@@ -204,6 +208,8 @@ struct CaptureIntent: Hashable, Sendable {
     let sequenceOrdinal: SourceOrdinal?
     let requestedDimensions: PixelDimensions
     let exposure: ExposureChoice
+    let aperture: ApertureChoice
+    let baselineAperture: Double?
     let biasEV: Double
     let focus: FocusIntent
     let whiteBalance: WhiteBalanceIntent

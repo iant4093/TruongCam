@@ -128,6 +128,9 @@ struct ExposureRequestRecord: Codable, Hashable, Sendable {
     var durationSeconds: Double?
     var iso: Double?
     var biasEV: Double
+    /// Absent in historical records: missing is unknown, never inferred Auto.
+    var apertureMode: String? = nil
+    var aperture: Double? = nil
 }
 
 struct FocusRequestRecord: Codable, Hashable, Sendable {

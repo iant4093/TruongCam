@@ -11,6 +11,7 @@ enum SequenceControlVerification {
         guard reading.generation == generation, reading.requestRevision == revision,
               reading.settlement.isSettled,
               reading.exposureChoice.mode == settings.exposure.mode,
+              settings.aperture.matches(readback: reading),
               CaptureCoordinator.closeEnough(reading.biasEV, settings.biasEV),
               (reading.focusMode == settings.focus.mode || (reading.isFixedFocusCamera && settings.focus.mode != .manual && reading.isFocusAdjusting == false)),
               reading.whiteBalanceMode == settings.whiteBalance.mode else { return false }
@@ -21,7 +22,9 @@ enum SequenceControlVerification {
             focusPosition: settings.focus.mode == .manual ? settings.focus.position : nil,
             redGain: whiteBalanceTarget?.red,
             greenGain: whiteBalanceTarget?.green,
-            blueGain: whiteBalanceTarget?.blue)
+            blueGain: whiteBalanceTarget?.blue,
+            lensAperture: settings.aperture.numericTarget,
+            apertureAutomatic: reading.isFixedApertureCamera ? nil : settings.aperture.numericTarget.map { _ in false })
         return target.isSatisfied(by: .init(snapshot: reading))
     }
 }

@@ -28,9 +28,9 @@ private actor JPEG51CaptureSurface: CaptureCameraSurface {
         controls.setConfigurationGeneration(capability.generation)
     }
     func applyControls(revision: UInt64, exposure: ExposureChoice, biasEV: Double,
-                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent) async -> Result<AppliedControlSnapshot, CaptureFailure> {
+                       focus: FocusIntent, whiteBalance: WhiteBalanceIntent, aperture: ApertureChoice = .auto) async -> Result<AppliedControlSnapshot, CaptureFailure> {
         await controls.applyControls(revision: revision, exposure: exposure, biasEV: biasEV,
-            focus: focus, whiteBalance: whiteBalance)
+            focus: focus, whiteBalance: whiteBalance, aperture: aperture)
     }
     func currentControlReadback() async -> AppliedControlSnapshot? { await controls.currentControlReadback() }
     func beginCapture(intent: CaptureIntent) -> any CaptureRequestTicket {

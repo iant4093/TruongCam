@@ -100,6 +100,7 @@ struct FormatCapability: Hashable, Sendable {
     var videoFrameRateRanges: [ClosedRange<Double>]
     let isVideoStabilizationSupported: Bool
     let secondaryNativeResolutionZoomFactors: [Double]
+    var apertureCapability: ApertureCapability? = nil
 }
 
 /// Everything discovered about one physical rear camera. Attach the input and
